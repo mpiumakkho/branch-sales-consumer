@@ -1,0 +1,118 @@
+# HQ side infrastructure: Kafka (single KRaft node), HQ PostgreSQL, optional Kafka UI.
+#
+# Networks
+#   hq   - HQ internal: Kafka internal listener, consumer, HQ DB
+#   wan  - simulates the internet path from branches: only Kafka's external listener is reachable
+# Branch producers join `wan` only (their own `branch` network lives in the producer repo),
+# so a branch can reach Kafka but not the HQ DB or the consumer.
+
+name: branch-sales-hq
+
+services:
+  kafka:
+    image: apache/kafka:4.3.1
+    container_name: hq-kafka
+    restart: unless-stopped
+    environment:
+      CLUSTER_ID: 0ATMR9b6StKTrmWwxu2YaA
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      # INTERNAL: HQ services on `hq`   EXTERNAL: branches via `wan`   HOST: tools/IDE on this machine
+      KAFKA_LISTENERS: INTERNAL://:19092,EXTERNAL://:9094,HOST://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:19092,EXTERNAL://kafka.hq.example:9094,HOST://localhost:${KAFKA_HOST_PORT:-9092}
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,HOST:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      # Single node: internal topics cannot have more than one replica
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      # Topics are created only by kafka-init, so a typo in a topic name fails instead of creating a new topic
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    ports:
+      - "${KAFKA_HOST_PORT:-9092}:9092"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    networks:
+      hq: {}
+      wan:
+        aliases:
+          - kafka.hq.example
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+
+  kafka-init:
+    image: apache/kafka:4.3.1
+    container_name: hq-kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      - hq
+    # Same partition count on both topics: the dead-letter publisher writes to the same partition number as the source record.
+    # Retention: 14 days for data (consumer can be down over a long holiday), 30 days for dead letters (time to investigate).
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -e
+        T=/opt/kafka/bin/kafka-topics.sh
+        $$T --bootstrap-server kafka:19092 --create --if-not-exists --topic branch-sales.daily-summary \
+          --partitions 6 --replication-factor 1 --config retention.ms=1209600000
+        $$T --bootstrap-server kafka:19092 --create --if-not-exists --topic branch-sales.daily-summary.dlt \
+          --partitions 6 --replication-factor 1 --config retention.ms=2592000000
+        $$T --bootstrap-server kafka:19092 --list
+
+  hq-db:
+    image: postgres:18.6-alpine
+    container_name: hq-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: hq_sales
+      POSTGRES_USER: hq_app
+      POSTGRES_PASSWORD: ${HQ_DB_PASSWORD:?set HQ_DB_PASSWORD in infra/.env}
+    ports:
+      - "${HQ_DB_PORT:-5433}:5432"
+    volumes:
+      # PostgreSQL 18 images keep data under /var/lib/postgresql/<major>/docker
+      - hq-db-data:/var/lib/postgresql
+    networks:
+      - hq
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hq_app -d hq_sales"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  kafka-ui:
+    image: ghcr.io/kafbat/kafka-ui:v1.5.0
+    container_name: hq-kafka-ui
+    profiles: ["tools"]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_CLUSTERS_0_NAME: hq
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:19092
+    ports:
+      - "${KAFKA_UI_PORT:-8088}:8080"
+    networks:
+      - hq
+
+volumes:
+  kafka-data:
+  hq-db-data:
+
+networks:
+  hq:
+    name: branch-sales-hq
+  wan:
+    name: branch-sales-wan
