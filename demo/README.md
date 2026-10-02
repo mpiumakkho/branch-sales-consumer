@@ -141,7 +141,19 @@ The data is still in the branch database. Reconnect:
 docker network connect branch-sales-wan branch-br0001-producer-1
 ```
 
-The next round sends the day (`SENT`, `attempts 2`), and HQ stores it.
+The next round sends the day (`SENT`, `attempts 2`), and HQ stores it. `sync_log` no longer shows the error; the attempt history does:
+
+```bash
+branch-sales-producer/demo/sql.sh BR0001 branch-sales-producer/demo/sync-attempts.sql
+```
+
+```
+ sale_date  | revision |  attempted_at_bkk   | result |               event_id               | error
+ 2026-10-04 |        1 | 2026-10-02 14:19:06 | FAILED | b3eb9ccd-31fa-4d7f-96bd-4b6706e50ec2 | not acknowledged by Kafka: ... No resolvable bootstrap urls given in bootstrap.servers
+ 2026-10-04 |        1 | 2026-10-02 14:20:02 | SENT   | d3559b83-f367-4e2e-af0b-6882262fe4e1 |
+```
+
+The `event_id` of the `SENT` attempt is the one HQ stores in `branch_daily_sales.event_id`.
 
 A message the producer recorded as failed may still have reached Kafka. In both test runs of this demo, the request sent while disconnected was delivered once the connection came back, so HQ received the day twice:
 
