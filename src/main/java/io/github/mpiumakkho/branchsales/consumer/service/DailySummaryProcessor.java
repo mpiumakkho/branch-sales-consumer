@@ -1,13 +1,11 @@
-package io.github.mpiumakkho.branchsales.consumer.processing;
+package io.github.mpiumakkho.branchsales.consumer.service;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 
-import io.github.mpiumakkho.branchsales.consumer.store.DailySalesStore;
-import io.github.mpiumakkho.branchsales.consumer.summary.DailySalesSummary;
-import io.github.mpiumakkho.branchsales.consumer.validation.ReferenceChecker;
-import io.github.mpiumakkho.branchsales.consumer.validation.RejectedMessageException;
-import io.github.mpiumakkho.branchsales.consumer.validation.SummaryValidator;
+import io.github.mpiumakkho.branchsales.consumer.dto.DailySalesSummary;
+import io.github.mpiumakkho.branchsales.consumer.exception.RejectedMessageException;
+import io.github.mpiumakkho.branchsales.consumer.repository.DailySalesStore;
 
 /**
  * Validates one record value and stores it. Each record gets its own database

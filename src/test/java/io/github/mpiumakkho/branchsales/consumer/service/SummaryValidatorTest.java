@@ -1,4 +1,4 @@
-package io.github.mpiumakkho.branchsales.consumer.validation;
+package io.github.mpiumakkho.branchsales.consumer.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -18,8 +18,10 @@ import org.junit.jupiter.params.provider.FieldSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import io.github.mpiumakkho.branchsales.consumer.ContractExamples;
-import io.github.mpiumakkho.branchsales.consumer.summary.DailySalesSummary;
-import io.github.mpiumakkho.branchsales.consumer.summary.DailySalesSummary.SalesLine;
+import io.github.mpiumakkho.branchsales.consumer.dto.DailySalesSummary;
+import io.github.mpiumakkho.branchsales.consumer.dto.DailySalesSummary.SalesLine;
+import io.github.mpiumakkho.branchsales.consumer.exception.RejectReason;
+import io.github.mpiumakkho.branchsales.consumer.exception.RejectedMessageException;
 
 class SummaryValidatorTest {
 

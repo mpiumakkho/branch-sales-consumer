@@ -1,4 +1,4 @@
-package io.github.mpiumakkho.branchsales.consumer.processing;
+package io.github.mpiumakkho.branchsales.consumer.config;
 
 import java.nio.charset.StandardCharsets;
 
@@ -13,7 +13,7 @@ import org.springframework.kafka.listener.DeadLetterPublishingRecoverer.HeaderNa
 import org.springframework.kafka.listener.DefaultErrorHandler;
 import org.springframework.util.backoff.ExponentialBackOff;
 
-import io.github.mpiumakkho.branchsales.consumer.validation.RejectedMessageException;
+import io.github.mpiumakkho.branchsales.consumer.exception.RejectedMessageException;
 
 @Configuration(proxyBeanMethods = false)
 class KafkaConsumerConfig {

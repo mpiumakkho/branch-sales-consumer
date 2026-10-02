@@ -1,4 +1,4 @@
-package io.github.mpiumakkho.branchsales.consumer.store;
+package io.github.mpiumakkho.branchsales.consumer.repository;
 
 import java.util.List;
 import java.util.Optional;
@@ -7,7 +7,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
-import io.github.mpiumakkho.branchsales.consumer.summary.DailySalesSummary;
+import io.github.mpiumakkho.branchsales.consumer.dto.DailySalesSummary;
 
 /**
  * Stores a summary by revision (rules R4–R6). Must run inside a transaction so

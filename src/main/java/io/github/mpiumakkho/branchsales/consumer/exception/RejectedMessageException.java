@@ -1,4 +1,4 @@
-package io.github.mpiumakkho.branchsales.consumer.validation;
+package io.github.mpiumakkho.branchsales.consumer.exception;
 
 /**
  * A record that failed a contract check. It is not retried: it goes to the

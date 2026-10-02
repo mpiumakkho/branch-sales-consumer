@@ -1,4 +1,4 @@
-package io.github.mpiumakkho.branchsales.consumer.processing;
+package io.github.mpiumakkho.branchsales.consumer.listener;
 
 import java.util.List;
 
@@ -10,8 +10,9 @@ import org.springframework.kafka.listener.BatchListenerFailedException;
 import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
 import org.springframework.stereotype.Component;
 
-import io.github.mpiumakkho.branchsales.consumer.store.DailySalesStore.Outcome;
-import io.github.mpiumakkho.branchsales.consumer.validation.RejectedMessageException;
+import io.github.mpiumakkho.branchsales.consumer.exception.RejectedMessageException;
+import io.github.mpiumakkho.branchsales.consumer.repository.DailySalesStore.Outcome;
+import io.github.mpiumakkho.branchsales.consumer.service.DailySummaryProcessor;
 
 /**
  * Batch listener for {@code branch-sales.daily-summary}.

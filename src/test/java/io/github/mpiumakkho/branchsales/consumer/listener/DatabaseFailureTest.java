@@ -1,4 +1,4 @@
-package io.github.mpiumakkho.branchsales.consumer.processing;
+package io.github.mpiumakkho.branchsales.consumer.listener;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
@@ -29,7 +29,7 @@ import org.testcontainers.kafka.KafkaContainer;
 
 import io.github.mpiumakkho.branchsales.consumer.ContractExamples;
 import io.github.mpiumakkho.branchsales.consumer.TestcontainersConfiguration;
-import io.github.mpiumakkho.branchsales.consumer.store.DailySalesStore;
+import io.github.mpiumakkho.branchsales.consumer.repository.DailySalesStore;
 
 /**
  * A database failure is not a contract rejection: the record must be retried

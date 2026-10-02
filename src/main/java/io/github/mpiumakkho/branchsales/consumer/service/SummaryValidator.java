@@ -1,4 +1,4 @@
-package io.github.mpiumakkho.branchsales.consumer.validation;
+package io.github.mpiumakkho.branchsales.consumer.service;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -28,8 +28,10 @@ import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
-import io.github.mpiumakkho.branchsales.consumer.summary.DailySalesSummary;
-import io.github.mpiumakkho.branchsales.consumer.summary.DailySalesSummary.SalesLine;
+import io.github.mpiumakkho.branchsales.consumer.dto.DailySalesSummary;
+import io.github.mpiumakkho.branchsales.consumer.dto.DailySalesSummary.SalesLine;
+import io.github.mpiumakkho.branchsales.consumer.exception.RejectReason;
+import io.github.mpiumakkho.branchsales.consumer.exception.RejectedMessageException;
 
 /**
  * Parse, schema and business layers of the contract checks. Needs no database,

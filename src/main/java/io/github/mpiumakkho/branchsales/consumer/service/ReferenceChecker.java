@@ -1,4 +1,4 @@
-package io.github.mpiumakkho.branchsales.consumer.validation;
+package io.github.mpiumakkho.branchsales.consumer.service;
 
 import java.util.Set;
 import java.util.TreeSet;
@@ -7,8 +7,10 @@ import java.util.stream.Collectors;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Component;
 
-import io.github.mpiumakkho.branchsales.consumer.summary.DailySalesSummary;
-import io.github.mpiumakkho.branchsales.consumer.summary.DailySalesSummary.SalesLine;
+import io.github.mpiumakkho.branchsales.consumer.dto.DailySalesSummary;
+import io.github.mpiumakkho.branchsales.consumer.dto.DailySalesSummary.SalesLine;
+import io.github.mpiumakkho.branchsales.consumer.exception.RejectReason;
+import io.github.mpiumakkho.branchsales.consumer.exception.RejectedMessageException;
 
 /**
  * Reference layer of the contract checks: branch and categories must exist in

@@ -1,4 +1,4 @@
-package io.github.mpiumakkho.branchsales.consumer.validation;
+package io.github.mpiumakkho.branchsales.consumer.exception;
 
 /**
  * Why a record was sent to the dead-letter topic. Values and order follow the

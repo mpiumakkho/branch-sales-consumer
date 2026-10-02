@@ -1,4 +1,4 @@
-package io.github.mpiumakkho.branchsales.consumer.summary;
+package io.github.mpiumakkho.branchsales.consumer.dto;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
