@@ -5,7 +5,8 @@ HQ side of Branch Daily Sales Sync. Reads confirmed daily sales summaries that b
 | Folder | Content |
 |---|---|
 | [`contract/`](contract/) | Message contract shared with the branch producer: JSON Schema, examples, topics |
-| [`infra/`](infra/) | Docker Compose for Kafka and the HQ database |
+| [`infra/`](infra/) | Docker Compose for Kafka, the HQ database and the consumer |
+| [`demo/`](demo/) | End-to-end demo with two branches: [demo/README.md](demo/README.md) |
 | `src/` | The consumer (Java 25, Spring Boot 4) |
 
 ## How a record is handled
@@ -41,7 +42,14 @@ The upsert uses `RETURNING old.*`, which needs PostgreSQL 18 or later.
 
 ## Run
 
-Requires JDK 25 and Docker.
+In Docker, together with Kafka and the HQ database (network `branch-sales-hq`):
+
+```bash
+cd infra && cp .env.example .env    # set HQ_DB_PASSWORD
+docker compose --profile consumer up -d --build && ./smoke-test.sh
+```
+
+From the IDE or the command line instead (requires JDK 25), with only Kafka and the DB in Docker:
 
 ```bash
 cd infra && cp .env.example .env    # set HQ_DB_PASSWORD
