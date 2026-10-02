@@ -1,0 +1,37 @@
+spring:
+  application:
+    name: branch-sales-consumer
+
+  datasource:
+    # Defaults match infra/docker-compose.yml when the consumer runs on the host
+    url: ${HQ_DB_URL:jdbc:postgresql://localhost:5433/hq_sales}
+    username: ${HQ_DB_USER:hq_app}
+    password: ${HQ_DB_PASSWORD}
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      group-id: hq-branch-sales-consumer
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      # Raw bytes: the listener parses JSON itself so a bad value becomes INVALID_JSON instead of a deserializer error,
+      # and the dead-letter record keeps the original bytes
+      value-deserializer: org.apache.kafka.common.serialization.ByteArrayDeserializer
+      # Upper bound on records handled per poll; this controls load on the HQ DB
+      max-poll-records: ${CONSUMER_MAX_POLL_RECORDS:100}
+    producer:
+      # Used only to write the dead-letter topic
+      acks: all
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.ByteArraySerializer
+    listener:
+      type: batch
+      ack-mode: batch
+      # Topic has 6 partitions; more threads than partitions would sit idle
+      concurrency: ${CONSUMER_CONCURRENCY:3}
+
+branch-sales:
+  kafka:
+    topic: branch-sales.daily-summary
+    dead-letter-topic: branch-sales.daily-summary.dlt
