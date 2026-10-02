@@ -32,6 +32,22 @@ The consumer checks a message in this order. The first failure sends the record 
 | Reference | `branchCode` exists in the HQ `branch` table | `UNKNOWN_BRANCH` |
 | Reference | every `categoryCode` exists in the HQ `category` table ([categories.md](categories.md)) | `UNKNOWN_CATEGORY` |
 
+### Dead-letter records
+
+A dead-letter record has the same key and the same value bytes as the rejected record, and is written to the same partition number. Headers:
+
+| Header | Value |
+|---|---|
+| `reject-reason` | one of the reject reasons above, UTF-8 |
+| `kafka_dlt-exception-message` | reason and detail, e.g. `TOTAL_MISMATCH: totalAmount 48250.00 but lines sum to 30250.00` |
+| `kafka_dlt-original-topic` | source topic, UTF-8 |
+| `kafka_dlt-original-partition` | source partition, 4-byte big-endian int |
+| `kafka_dlt-original-offset` | source offset, 8-byte big-endian long |
+
+The `kafka_dlt-*` headers are written by Spring Kafka's `DeadLetterPublishingRecoverer`; it also adds the original timestamp and the exception class.
+
+Failures that are not contract rejections, such as the HQ database being unreachable, never produce dead letters. The consumer retries the record until it succeeds.
+
 Messages that pass all layers are applied by revision. These are normal outcomes, not errors, and do not go to the dead-letter topic:
 
 | Stored revision for `(branchCode, saleDate)` | Incoming revision | Action |
