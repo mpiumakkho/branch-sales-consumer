@@ -47,7 +47,7 @@ The password must be 8–128 characters from `A-Z a-z 0-9 . _ ~ -` (no quoting n
 ./offboard-branch.sh BR0001    # credentials leaked or branch closed
 ```
 
-This removes the ACLs, so the branch's next write is refused even on an open connection, and deletes the SCRAM credentials, so it cannot log in again. Branch sessions must log in again every 10 minutes (`connections.max.reauth.ms` on `EXTERNAL`), so a session opened with an old password ends within 10 minutes, also when the branch is onboarded again with a new password. The topic, the HQ branch row and the stored sales stay. To give access back, onboard again with a new password.
+Closing a branch: HQ still accepts its back-dated sales (duplicates are skipped by revision), so offboard only after the branch has nothing pending (no `CONFIRMED` day without a `SENT` row in its `sync_log`). Offboarding removes the ACLs, so the branch's next write is refused even on an open connection, and deletes the SCRAM credentials, so it cannot log in again. Branch sessions must log in again every 10 minutes (`connections.max.reauth.ms` on `EXTERNAL`), so a session opened with an old password ends within 10 minutes, also when the branch is onboarded again with a new password. The topic, the HQ branch row and the stored sales stay. To give access back, onboard again with a new password.
 
 ## Networks
 
