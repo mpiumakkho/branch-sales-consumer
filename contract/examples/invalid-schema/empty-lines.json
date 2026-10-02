@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "eventId": "4e5f6a7b-8c9d-4e0f-9a1b-3c4d5e6f7a8b",
+  "branchCode": "BR0001",
+  "saleDate": "2026-10-01",
+  "revision": 1,
+  "confirmedAt": "2026-10-01T21:45:00+07:00",
+  "currency": "THB",
+  "totalAmount": "0.00",
+  "lines": []
+}

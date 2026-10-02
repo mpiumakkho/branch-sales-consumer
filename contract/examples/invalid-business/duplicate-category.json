@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "eventId": "7b8c9d0e-1f2a-4b3c-8d4e-6f7a8b9c0d1e",
+  "branchCode": "BR0001",
+  "saleDate": "2026-10-01",
+  "revision": 1,
+  "confirmedAt": "2026-10-01T21:45:00+07:00",
+  "currency": "THB",
+  "totalAmount": "300.00",
+  "lines": [
+    { "categoryCode": "BEVERAGE", "amount": "100.00", "quantity": 2 },
+    { "categoryCode": "BEVERAGE", "amount": "200.00", "quantity": 4 }
+  ]
+}

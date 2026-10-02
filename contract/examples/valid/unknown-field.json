@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "eventId": "1b2c3d4e-5f6a-4b7c-8d9e-0f1a2b3c4d5e",
+  "branchCode": "BR0002",
+  "saleDate": "2026-10-01",
+  "revision": 1,
+  "confirmedAt": "2026-10-01T22:05:00+07:00",
+  "currency": "THB",
+  "totalAmount": "5000.00",
+  "posSystemVersion": "added-by-a-newer-producer",
+  "lines": [
+    { "categoryCode": "OTHER", "amount": "5000.00", "quantity": 80, "note": "unknown fields must be ignored" }
+  ]
+}

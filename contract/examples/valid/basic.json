@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "eventId": "3f1c2a9e-8b4d-4c1e-9f2a-6d7e8a9b0c1d",
+  "branchCode": "BR0001",
+  "saleDate": "2026-10-01",
+  "revision": 1,
+  "confirmedAt": "2026-10-01T21:45:00+07:00",
+  "currency": "THB",
+  "totalAmount": "41870.50",
+  "lines": [
+    { "categoryCode": "BEVERAGE", "amount": "18200.00", "quantity": 410 },
+    { "categoryCode": "SNACK", "amount": "12050.00", "quantity": 395 },
+    { "categoryCode": "READY_MEAL", "amount": "9120.50", "quantity": 152 },
+    { "categoryCode": "HOUSEHOLD", "amount": "2500.00", "quantity": 37 }
+  ]
+}

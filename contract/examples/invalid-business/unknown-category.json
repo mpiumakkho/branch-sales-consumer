@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "eventId": "8c9d0e1f-2a3b-4c4d-9e5f-7a8b9c0d1e2f",
+  "branchCode": "BR0001",
+  "saleDate": "2026-10-01",
+  "revision": 1,
+  "confirmedAt": "2026-10-01T21:45:00+07:00",
+  "currency": "THB",
+  "totalAmount": "100.00",
+  "lines": [
+    { "categoryCode": "LOTTERY", "amount": "100.00", "quantity": 1 }
+  ]
+}
