@@ -20,10 +20,10 @@ if [[ -f kafka.pem ]]; then
   exit 0
 fi
 
-openssl req -quiet -x509 -newkey rsa:3072 -nodes -days 825 -subj "/CN=branch-sales demo CA" \
+openssl req -x509 -newkey rsa:3072 -nodes -days 825 -subj "/CN=branch-sales demo CA" \
   -keyout ca.key -out ca.crt
 
-openssl req -quiet -newkey rsa:3072 -nodes -subj "/CN=kafka.hq.example" \
+openssl req -newkey rsa:3072 -nodes -subj "/CN=kafka.hq.example" \
   -keyout kafka.key -out kafka.csr
 # Clients check that the host name they connect to is in the certificate (subjectAltName)
 printf 'subjectAltName=DNS:kafka.hq.example\nextendedKeyUsage=serverAuth\n' > kafka.ext
