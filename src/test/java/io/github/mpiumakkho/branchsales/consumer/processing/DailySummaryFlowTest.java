@@ -1,4 +1,4 @@
-package io.github.mpiumakkho.branchsales.consumer.ingest;
+package io.github.mpiumakkho.branchsales.consumer.processing;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;

@@ -1,4 +1,4 @@
-package io.github.mpiumakkho.branchsales.consumer.ingest;
+package io.github.mpiumakkho.branchsales.consumer.processing;
 
 import java.nio.charset.StandardCharsets;
 

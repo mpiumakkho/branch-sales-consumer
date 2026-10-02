@@ -1,4 +1,4 @@
-package io.github.mpiumakkho.branchsales.consumer.ingest;
+package io.github.mpiumakkho.branchsales.consumer.processing;
 
 import java.util.List;
 
@@ -28,11 +28,11 @@ public class DailySummaryListener {
 
 	private static final Logger log = LoggerFactory.getLogger(DailySummaryListener.class);
 
-	private final SummaryIngestService ingestService;
+	private final DailySummaryProcessor processor;
 	private final DeadLetterPublishingRecoverer deadLetters;
 
-	public DailySummaryListener(SummaryIngestService ingestService, DeadLetterPublishingRecoverer deadLetters) {
-		this.ingestService = ingestService;
+	public DailySummaryListener(DailySummaryProcessor processor, DeadLetterPublishingRecoverer deadLetters) {
+		this.processor = processor;
 		this.deadLetters = deadLetters;
 	}
 
@@ -51,9 +51,9 @@ public class DailySummaryListener {
 
 	private void handle(ConsumerRecord<String, byte[]> record) {
 		try {
-			var ingested = ingestService.ingest(record.value());
-			var summary = ingested.summary();
-			var result = ingested.result();
+			var processed = processor.process(record.value());
+			var summary = processed.summary();
+			var result = processed.result();
 			if (result.outcome() == Outcome.STALE) {
 				log.warn("{} {}/{} revision {} skipped: stored revision {} is newer ({})", result.outcome(),
 						summary.branchCode(), summary.saleDate(), summary.revision(), result.storedRevision(),
