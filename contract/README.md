@@ -6,14 +6,16 @@ The only thing the branch producer and the HQ consumer share. There is no shared
 
 | Topic | Written by | Content |
 |---|---|---|
-| `branch-sales.daily-summary` | branch producer | `DailySalesSummary` messages |
+| `branch-sales.daily-summary.<branchCode>` | that branch's producer only | `DailySalesSummary` messages of one branch. One topic per branch, created when the branch is onboarded |
 | `branch-sales.daily-summary.dlt` | HQ consumer | messages the consumer could not accept, with the reason in record headers |
+
+Each branch logs in to Kafka with its own user (= branch code), which may write only its own topic. The topic therefore tells HQ which branch sent a record, and HQ checks that the `branchCode` in the message is the same (`BRANCH_MISMATCH`).
 
 ## Record format
 
 | Part | Value |
 |---|---|
-| Key | `branchCode` (UTF-8 string). All messages of one branch go to the same partition, so revisions of the same day are read in order. |
+| Key | `branchCode` (UTF-8 string), required, equal to `branchCode` in the value (`KEY_MISMATCH` otherwise). |
 | Value | UTF-8 JSON matching [`daily-sales-summary.v1.schema.json`](daily-sales-summary.v1.schema.json) |
 | Headers | none required in v1 |
 
@@ -27,6 +29,8 @@ The consumer checks a message in this order. The first failure sends the record 
 |---|---|---|
 | Parse | value is valid JSON | `INVALID_JSON` |
 | Schema | matches the JSON Schema, with `format` validation enabled (`uuid`, `date`, `date-time`) | `SCHEMA_INVALID` |
+| Identity | `branchCode` equals the branch of the topic (`branch-sales.daily-summary.<branchCode>`) | `BRANCH_MISMATCH` |
+| Identity | record key equals `branchCode` | `KEY_MISMATCH` |
 | Business | `totalAmount` equals the sum of `lines[].amount` | `TOTAL_MISMATCH` |
 | Business | `categoryCode` is unique within `lines` | `DUPLICATE_CATEGORY` |
 | Reference | `branchCode` exists in the HQ `branch` table | `UNKNOWN_BRANCH` |
@@ -34,7 +38,7 @@ The consumer checks a message in this order. The first failure sends the record 
 
 ### Dead-letter records
 
-A dead-letter record has the same key and the same value bytes as the rejected record, and is written to the same partition number. Headers:
+A dead-letter record has the same key and the same value bytes as the rejected record. It is partitioned by key. Headers:
 
 | Header | Value |
 |---|---|
