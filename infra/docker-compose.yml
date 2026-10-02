@@ -92,6 +92,26 @@ services:
       retries: 10
       start_period: 10s
 
+  # The HQ consumer, built from this repo. Profile `consumer`, so `docker compose up -d` alone still starts only
+  # Kafka and the DB (for running the consumer from an IDE instead).
+  consumer:
+    build: ..
+    image: branch-sales-consumer:local
+    container_name: hq-consumer
+    profiles: ["consumer"]
+    restart: unless-stopped
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      hq-db:
+        condition: service_healthy
+    environment:
+      HQ_DB_URL: jdbc:postgresql://hq-db:5432/hq_sales
+      HQ_DB_PASSWORD: ${HQ_DB_PASSWORD:?set HQ_DB_PASSWORD in infra/.env}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:19092
+    networks:
+      - hq
+
   kafka-ui:
     image: ghcr.io/kafbat/kafka-ui:v1.5.0
     container_name: hq-kafka-ui

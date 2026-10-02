@@ -7,6 +7,7 @@ Kafka and the HQ database for local development and the demo.
 | `kafka` | `apache/kafka:4.3.1` | Single KRaft node (broker + controller) |
 | `kafka-init` | `apache/kafka:4.3.1` | Creates the contract topics, then exits |
 | `hq-db` | `postgres:18.6-alpine` | HQ database `hq_sales`. Tables are created by the consumer's migrations |
+| `consumer` | built from this repo (`../Dockerfile`) | The HQ consumer. Profile `consumer` |
 | `kafka-ui` | `ghcr.io/kafbat/kafka-ui:v1.5.0` | Optional, profile `tools` |
 
 ## Run
@@ -18,6 +19,7 @@ docker compose up -d
 docker compose ps             # kafka and hq-db healthy, kafka-init exited 0
 ./smoke-test.sh
 
+docker compose --profile consumer up -d --build # the consumer as well (otherwise run it from the IDE)
 docker compose --profile tools up -d kafka-ui   # optional, http://localhost:8088
 ```
 
