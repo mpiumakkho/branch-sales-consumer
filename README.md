@@ -12,8 +12,10 @@ HQ side of Branch Daily Sales Sync. Reads confirmed daily sales summaries that b
 ## How a record is handled
 
 ```
-branch-sales.daily-summary ──► batch listener ──► per record:
-                                                   parse → schema → business → reference (branch, category)
+branch-sales.daily-summary.<branchCode>  (topic pattern, one topic per branch)
+        │
+        └──► batch listener ──► per record:
+                                  parse → schema → identity (topic, key) → business → reference (branch, category)
                                                      │ fail                          │ pass
                                                      ▼                               ▼
                                      branch-sales.daily-summary.dlt      upsert by revision, own DB transaction
@@ -21,7 +23,7 @@ branch-sales.daily-summary ──► batch listener ──► per record:
                                           offsets committed after the whole batch is handled
 ```
 
-- Validation layers and reject reasons are defined in [`contract/README.md`](contract/README.md). The schema file is copied from `contract/` onto the classpath at build time, so there is one copy only.
+- Validation layers and reject reasons are defined in [`contract/README.md`](contract/README.md). Only a branch's own Kafka user may write its topic (ACL set by `infra/onboard-branch.sh`), so the identity layer rejects a message whose `branchCode` is not the topic's branch (`BRANCH_MISMATCH`) or whose key is not its `branchCode` (`KEY_MISMATCH`). The schema file is copied from `contract/` onto the classpath at build time, so there is one copy only.
 - Each record gets its own database transaction. A rejected record goes to the dead-letter topic and the batch continues.
 - Offsets are committed after the listener returns (ack mode `BATCH`), so after every record's transaction has committed.
 - Revisions (rules R4–R6): one `INSERT ... ON CONFLICT DO UPDATE ... WHERE stored.revision < incoming.revision`. A higher revision replaces the header and all lines; the same revision is logged as `DUPLICATE`; a lower one is logged as `STALE` at WARN. Neither goes to the dead-letter topic.
@@ -46,6 +48,7 @@ In Docker, together with Kafka and the HQ database (network `branch-sales-hq`):
 
 ```bash
 cd infra && cp .env.example .env    # set HQ_DB_PASSWORD
+tls/generate-certs.sh
 docker compose --profile consumer up -d --build && ./smoke-test.sh
 ```
 
@@ -53,16 +56,17 @@ From the IDE or the command line instead (requires JDK 25), with only Kafka and 
 
 ```bash
 cd infra && cp .env.example .env    # set HQ_DB_PASSWORD
+tls/generate-certs.sh
 docker compose up -d && ./smoke-test.sh && cd ..
 
 set -a; . infra/.env; set +a        # HQ_DB_PASSWORD for the consumer
 ./mvnw spring-boot:run
 ```
 
-Before branch data is accepted, the branch must exist in the `branch` table:
+Before branch data is accepted, the branch must be onboarded: Kafka user, topic, ACL, quota and HQ `branch` row in one step ([infra/README.md](infra/README.md#onboarding-a-branch)):
 
-```sql
-insert into branch (branch_code, name) values ('BR0001', 'Branch 1');
+```bash
+BRANCH_KAFKA_PASSWORD=... infra/onboard-branch.sh BR0001 "Branch 1"
 ```
 
 Configuration (environment variables):
@@ -86,6 +90,6 @@ Needs Docker. The tests start their own Kafka and PostgreSQL containers (same im
 
 | Test | Checks |
 |---|---|
-| `SummaryValidatorTest` | every file in `contract/examples/` gets its expected result from the parse, schema and business layers; edge cases (not JSON, repeated key, formats, out-of-range numbers) |
-| `DailySummaryFlowTest` | through Kafka: valid examples stored, every invalid example in the dead-letter topic with the right `reject-reason` and unchanged bytes, revision rules R4–R6 |
+| `SummaryValidatorTest` | every file in `contract/examples/` gets its expected result from the parse, schema, identity and business layers; layer order; edge cases (not JSON, repeated key, formats, out-of-range numbers) |
+| `DailySummaryFlowTest` | through Kafka, one topic per branch: valid examples stored, every invalid example in the dead-letter topic with the right `reject-reason` and unchanged bytes, `BRANCH_MISMATCH` / `KEY_MISMATCH`, revision rules R4–R6 |
 | `DatabaseFailureTest` | a database error is retried until the record is stored, and is not sent to the dead-letter topic |
