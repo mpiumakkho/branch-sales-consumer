@@ -2,15 +2,30 @@ package io.github.mpiumakkho.branchsales.consumer;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 /** Reads the example messages in contract/examples (tests run with the project root as working directory). */
 public final class ContractExamples {
 
 	private static final Path ROOT = Path.of("contract", "examples");
+	private static final Pattern BRANCH_CODE = Pattern.compile("\"branchCode\"\\s*:\\s*\"([^\"]*)\"");
+
+	/** Topic of a branch, as created by infra/onboard-branch.sh. */
+	public static String topicOf(String branchCode) {
+		return "branch-sales.daily-summary." + branchCode;
+	}
+
+	/** The branchCode in a message value, or BR0001 if there is none (e.g. not JSON): the branch a producer would send it as. */
+	public static String branchCodeOf(byte[] value) {
+		Matcher m = BRANCH_CODE.matcher(new String(value == null ? new byte[0] : value, StandardCharsets.UTF_8));
+		return m.find() ? m.group(1) : "BR0001";
+	}
 
 	private ContractExamples() {
 	}

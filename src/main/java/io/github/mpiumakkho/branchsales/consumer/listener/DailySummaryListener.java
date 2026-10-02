@@ -15,7 +15,7 @@ import io.github.mpiumakkho.branchsales.consumer.repository.DailySalesStore.Outc
 import io.github.mpiumakkho.branchsales.consumer.service.DailySummaryProcessor;
 
 /**
- * Batch listener for {@code branch-sales.daily-summary}.
+ * Batch listener for the branch topics {@code branch-sales.daily-summary.<branchCode>}.
  * <p>
  * Offsets are committed by the container after this method returns (ack mode
  * BATCH), which is after every record's database transaction has committed.
@@ -37,7 +37,8 @@ public class DailySummaryListener {
 		this.deadLetters = deadLetters;
 	}
 
-	@KafkaListener(topics = "${branch-sales.kafka.topic}")
+	// One topic per branch; topics of newly onboarded branches are picked up at the next metadata refresh
+	@KafkaListener(topicPattern = "${branch-sales.kafka.topic-pattern}")
 	public void onBatch(List<ConsumerRecord<String, byte[]>> records) {
 		for (int i = 0; i < records.size(); i++) {
 			ConsumerRecord<String, byte[]> record = records.get(i);
@@ -52,7 +53,7 @@ public class DailySummaryListener {
 
 	private void handle(ConsumerRecord<String, byte[]> record) {
 		try {
-			var processed = processor.process(record.value());
+			var processed = processor.process(record.topic(), record.key(), record.value());
 			var summary = processed.summary();
 			var result = processed.result();
 			if (result.outcome() == Outcome.STALE) {

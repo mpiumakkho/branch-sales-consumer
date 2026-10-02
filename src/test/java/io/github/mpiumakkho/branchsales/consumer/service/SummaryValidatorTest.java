@@ -57,7 +57,7 @@ class SummaryValidatorTest {
 	void contractExample(String example) {
 		byte[] value = ContractExamples.read(example);
 		if (ACCEPTED.contains(example)) {
-			assertThat(validator.validate(value)).isNotNull();
+			assertThat(validate(value)).isNotNull();
 		}
 		else {
 			assertRejected(value, REJECTED.get(example));
@@ -66,7 +66,7 @@ class SummaryValidatorTest {
 
 	@Test
 	void mapsFieldsWithMoneyAsBigDecimal() {
-		DailySalesSummary summary = validator.validate(ContractExamples.read("valid/basic.json"));
+		DailySalesSummary summary = validate(ContractExamples.read("valid/basic.json"));
 
 		assertThat(summary.eventId()).isEqualTo(UUID.fromString("3f1c2a9e-8b4d-4c1e-9f2a-6d7e8a9b0c1d"));
 		assertThat(summary.branchCode()).isEqualTo("BR0001");
@@ -112,8 +112,43 @@ class SummaryValidatorTest {
 		assertRejected(replace("\"revision\": 1,", "\"revision\": 3000000000,"), RejectReason.SCHEMA_INVALID);
 	}
 
+	@Test
+	void rejectsBranchCodeThatIsNotTheTopicBranch() {
+		assertThatThrownBy(() -> validator.validate(ContractExamples.topicOf("BR0002"), "BR0001",
+				ContractExamples.read("valid/basic.json")))
+				.isInstanceOf(RejectedMessageException.class)
+				.hasMessage("BRANCH_MISMATCH: branchCode BR0001 sent on the topic of branch BR0002");
+	}
+
+	@Test
+	void rejectsKeyThatIsNotTheBranchCode() {
+		byte[] value = ContractExamples.read("valid/basic.json");
+		assertThatThrownBy(() -> validator.validate(ContractExamples.topicOf("BR0001"), "BR0002", value))
+				.hasMessage("KEY_MISMATCH: record key 'BR0002', branchCode BR0001");
+		assertThatThrownBy(() -> validator.validate(ContractExamples.topicOf("BR0001"), null, value))
+				.hasMessage("KEY_MISMATCH: record key missing, branchCode BR0001");
+	}
+
+	@Test
+	void identityIsCheckedAfterSchemaAndBeforeBusinessRules() {
+		// Schema error wins over a wrong topic
+		assertThatThrownBy(() -> validator.validate(ContractExamples.topicOf("BR0002"), "BR0001",
+				ContractExamples.read("invalid-schema/revision-zero.json")))
+				.extracting(e -> ((RejectedMessageException) e).reason()).isEqualTo(RejectReason.SCHEMA_INVALID);
+		// A wrong topic wins over a business error
+		assertThatThrownBy(() -> validator.validate(ContractExamples.topicOf("BR0002"), "BR0001",
+				ContractExamples.read("invalid-business/total-mismatch.json")))
+				.extracting(e -> ((RejectedMessageException) e).reason()).isEqualTo(RejectReason.BRANCH_MISMATCH);
+	}
+
+	/** Validates as the branch in the value would send it: on its own topic, key = branchCode. */
+	private DailySalesSummary validate(byte[] value) {
+		String branch = ContractExamples.branchCodeOf(value);
+		return validator.validate(ContractExamples.topicOf(branch), branch, value);
+	}
+
 	private void assertRejected(byte[] value, RejectReason reason) {
-		assertThatThrownBy(() -> validator.validate(value))
+		assertThatThrownBy(() -> validate(value))
 				.isInstanceOf(RejectedMessageException.class)
 				.extracting(e -> ((RejectedMessageException) e).reason())
 				.isEqualTo(reason);

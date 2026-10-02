@@ -34,8 +34,8 @@ public class DailySummaryProcessor {
 	 * @return the stored outcome; the transaction is committed when this returns
 	 * @throws RejectedMessageException if the value fails a contract check
 	 */
-	public Processed process(byte[] value) {
-		DailySalesSummary summary = validator.validate(value);
+	public Processed process(String topic, String key, byte[] value) {
+		DailySalesSummary summary = validator.validate(topic, key, value);
 		DailySalesStore.Result result = transaction.execute(status -> {
 			referenceChecker.check(summary);
 			return store.apply(summary);

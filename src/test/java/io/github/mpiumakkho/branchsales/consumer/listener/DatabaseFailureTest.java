@@ -51,9 +51,6 @@ class DatabaseFailureTest {
 	@Autowired
 	KafkaContainer kafkaContainer;
 
-	@Value("${branch-sales.kafka.topic}")
-	String topic;
-
 	@Value("${branch-sales.kafka.dead-letter-topic}")
 	String deadLetterTopic;
 
@@ -64,7 +61,7 @@ class DatabaseFailureTest {
 				.doCallRealMethod()
 				.when(store).apply(any());
 
-		kafka.send(topic, "BR0001", ContractExamples.read("valid/basic.json")).join();
+		kafka.send(ContractExamples.topicOf("BR0001"), "BR0001", ContractExamples.read("valid/basic.json")).join();
 
 		await().atMost(Duration.ofSeconds(30)).until(() -> jdbc
 				.sql("select count(*) from branch_daily_sales where branch_code = 'BR0001'")

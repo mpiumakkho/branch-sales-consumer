@@ -13,6 +13,7 @@ import org.testcontainers.utility.DockerImageName;
 @TestConfiguration(proxyBeanMethods = false)
 public class TestcontainersConfiguration {
 
+	/** Partitions of the dead-letter topic. */
 	public static final int PARTITIONS = 2;
 
 	@Bean
@@ -27,11 +28,21 @@ public class TestcontainersConfiguration {
 		return new PostgreSQLContainer(DockerImageName.parse("postgres:18.6-alpine"));
 	}
 
-	// In infra the topics are created by kafka-init. Both need the same partition count,
-	// because a dead letter goes to the same partition number as its source record.
+	// In infra a branch topic is created by onboard-branch.sh (1 partition). The examples use BR0001, BR0002 and BR9999
+	// (BR9999 has a topic but is not in the branch registry).
 	@Bean
-	NewTopic summaryTopic(@Value("${branch-sales.kafka.topic}") String name) {
-		return new NewTopic(name, PARTITIONS, (short) 1);
+	NewTopic topicBr0001() {
+		return new NewTopic(ContractExamples.topicOf("BR0001"), 1, (short) 1);
+	}
+
+	@Bean
+	NewTopic topicBr0002() {
+		return new NewTopic(ContractExamples.topicOf("BR0002"), 1, (short) 1);
+	}
+
+	@Bean
+	NewTopic topicBr9999() {
+		return new NewTopic(ContractExamples.topicOf("BR9999"), 1, (short) 1);
 	}
 
 	@Bean

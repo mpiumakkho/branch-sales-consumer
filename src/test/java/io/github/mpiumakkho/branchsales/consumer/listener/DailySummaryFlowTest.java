@@ -60,9 +60,6 @@ class DailySummaryFlowTest {
 	@Autowired
 	KafkaContainer kafkaContainer;
 
-	@Value("${branch-sales.kafka.topic}")
-	String topic;
-
 	@Value("${branch-sales.kafka.dead-letter-topic}")
 	String deadLetterTopic;
 
@@ -97,11 +94,11 @@ class DailySummaryFlowTest {
 				"invalid-business/unknown-category.json", RejectReason.UNKNOWN_CATEGORY);
 		byte[] notJson = "not json".getBytes(StandardCharsets.UTF_8);
 
-		// Valid and invalid records interleaved, so they share batches
-		send("BR0001", ContractExamples.read("valid/basic.json"));
-		invalid.keySet().forEach(name -> send("BR0001", ContractExamples.read(name)));
-		send("BR0001", notJson);
-		send("BR0002", ContractExamples.read("valid/unknown-field.json"));
+		// Valid and invalid records interleaved, so they share batches. Each on its branch's topic with key = branchCode.
+		send(ContractExamples.read("valid/basic.json"));
+		invalid.keySet().forEach(name -> send(ContractExamples.read(name)));
+		send(notJson);
+		send(ContractExamples.read("valid/unknown-field.json"));
 
 		List<ConsumerRecord<String, byte[]>> deadLetters = readDeadLetters(invalid.size() + 1);
 
@@ -110,11 +107,11 @@ class DailySummaryFlowTest {
 		Map<String, RejectReason> actual = new HashMap<>();
 		for (ConsumerRecord<String, byte[]> record : deadLetters) {
 			actual.put(sourceOf(record.value(), invalid.keySet()), RejectReason.valueOf(header(record, "reject-reason")));
-			assertThat(record.key()).isEqualTo("BR0001");
-			assertThat(header(record, "kafka_dlt-original-topic")).isEqualTo(topic);
-			// Spring Kafka writes the original partition as a 4-byte int
-			assertThat(ByteBuffer.wrap(rawHeader(record, "kafka_dlt-original-partition")).getInt())
-					.isEqualTo(record.partition());
+			String branch = ContractExamples.branchCodeOf(record.value());
+			assertThat(record.key()).isEqualTo(branch);
+			assertThat(header(record, "kafka_dlt-original-topic")).isEqualTo(ContractExamples.topicOf(branch));
+			// Spring Kafka writes the original partition as a 4-byte int; every branch topic has one partition
+			assertThat(ByteBuffer.wrap(rawHeader(record, "kafka_dlt-original-partition")).getInt()).isZero();
 		}
 		assertThat(actual).isEqualTo(expected);
 
@@ -127,21 +124,43 @@ class DailySummaryFlowTest {
 	}
 
 	@Test
+	void rejectsRecordsWhoseTopicOrKeyDoesNotMatchBranchCode() {
+		byte[] br0002 = ContractExamples.read("valid/unknown-field.json");
+		byte[] br0001 = ContractExamples.read("valid/basic.json");
+
+		// Q5: BR0002's message on BR0001's topic (only User:BR0001 can write there, so BR0001 sent it)
+		kafka.send(ContractExamples.topicOf("BR0001"), "BR0002", br0002).join();
+		// Q7: key does not match branchCode, and no key at all
+		kafka.send(ContractExamples.topicOf("BR0001"), "BR0002", br0001).join();
+		kafka.send(ContractExamples.topicOf("BR0001"), null, br0001).join();
+
+		List<ConsumerRecord<String, byte[]>> deadLetters = readDeadLetters(3);
+		assertThat(deadLetters).extracting(r -> header(r, "reject-reason"))
+				.containsExactlyInAnyOrder("BRANCH_MISMATCH", "KEY_MISMATCH", "KEY_MISMATCH");
+		assertThat(deadLetters).extracting(r -> header(r, "kafka_dlt-exception-message")).contains(
+				"BRANCH_MISMATCH: branchCode BR0002 sent on the topic of branch BR0001",
+				"KEY_MISMATCH: record key 'BR0002', branchCode BR0001",
+				"KEY_MISMATCH: record key missing, branchCode BR0001");
+		assertThat(storedRevision("BR0001")).isEmpty();
+		assertThat(storedRevision("BR0002")).isEmpty();
+	}
+
+	@Test
 	void appliesOnlyHigherRevisions() {
-		send("BR0001", ContractExamples.read("valid/basic.json"));
+		send(ContractExamples.read("valid/basic.json"));
 		await().atMost(TIMEOUT).until(() -> storedRevision("BR0001").equals(Optional.of(1)));
 
 		// R4: higher revision replaces header and lines
-		send("BR0001", ContractExamples.read("valid/revision-2.json"));
+		send(ContractExamples.read("valid/revision-2.json"));
 		await().atMost(TIMEOUT).until(() -> storedRevision("BR0001").equals(Optional.of(2)));
 		assertThat(lines("BR0001")).containsExactly(
 				"BEVERAGE 18700.00 422", "HOUSEHOLD 2500.00 37", "READY_MEAL 9120.50 152", "SNACK 12050.00 395");
 
-		// R6 stale, then R5 duplicate. A marker for another day on the same key (same partition, so read after both)
+		// R6 stale, then R5 duplicate. A marker for another day on the same topic (one partition, so read after both)
 		// shows when the consumer has handled them.
-		send("BR0001", ContractExamples.read("valid/basic.json"));
-		send("BR0001", ContractExamples.read("valid/revision-2.json"));
-		send("BR0001", basicForDate(SALE_DATE.plusDays(1)));
+		send(ContractExamples.read("valid/basic.json"));
+		send(ContractExamples.read("valid/revision-2.json"));
+		send(basicForDate(SALE_DATE.plusDays(1)));
 		await().atMost(TIMEOUT).until(() -> storedRevision("BR0001", SALE_DATE.plusDays(1)).isPresent());
 
 		assertThat(storedRevision("BR0001")).contains(2);
@@ -152,8 +171,10 @@ class DailySummaryFlowTest {
 		assertThat(deadLetterReader.poll(Duration.ofSeconds(2))).isEmpty();
 	}
 
-	private void send(String key, byte[] value) {
-		kafka.send(topic, key, value).join();
+	/** Sends as the branch in the value would: on its topic, key = branchCode. */
+	private void send(byte[] value) {
+		String branch = ContractExamples.branchCodeOf(value);
+		kafka.send(ContractExamples.topicOf(branch), branch, value).join();
 	}
 
 	private static byte[] basicForDate(LocalDate date) {

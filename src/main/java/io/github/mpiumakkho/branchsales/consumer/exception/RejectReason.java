@@ -7,6 +7,8 @@ package io.github.mpiumakkho.branchsales.consumer.exception;
 public enum RejectReason {
 	INVALID_JSON,
 	SCHEMA_INVALID,
+	BRANCH_MISMATCH,
+	KEY_MISMATCH,
 	TOTAL_MISMATCH,
 	DUPLICATE_CATEGORY,
 	UNKNOWN_BRANCH,

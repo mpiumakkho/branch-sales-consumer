@@ -22,15 +22,17 @@ class KafkaConsumerConfig {
 	static final String REJECT_REASON_HEADER = "reject-reason";
 
 	/**
-	 * Publishes rejected records unchanged (same key and value bytes) to the same
-	 * partition number of the dead-letter topic. Spring Kafka adds the original
+	 * Publishes rejected records unchanged (same key and value bytes) to the
+	 * dead-letter topic, partitioned by key. Spring Kafka adds the original
 	 * topic, partition, offset and the exception message as headers.
 	 */
 	@Bean
 	DeadLetterPublishingRecoverer deadLetterPublishingRecoverer(KafkaTemplate<String, byte[]> template,
 			@Value("${branch-sales.kafka.dead-letter-topic}") String deadLetterTopic) {
 		var recoverer = new DeadLetterPublishingRecoverer(template,
-				(record, ex) -> new TopicPartition(deadLetterTopic, record.partition()));
+				// Partition -1: the producer chooses by key. Every branch topic has one partition, so keeping the
+				// source partition number would put all dead letters in partition 0.
+				(record, ex) -> new TopicPartition(deadLetterTopic, -1));
 		// A contract rejection is not a code error; the stack trace adds nothing for whoever reads the dead letters
 		recoverer.excludeHeader(HeaderNames.HeadersToAdd.EX_STACKTRACE);
 		recoverer.setHeadersFunction((record, ex) -> {
