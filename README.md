@@ -1,5 +1,7 @@
 # branch-sales-consumer
 
+[![ci](https://github.com/mpiumakkho/branch-sales-consumer/actions/workflows/ci.yml/badge.svg)](https://github.com/mpiumakkho/branch-sales-consumer/actions/workflows/ci.yml)
+
 HQ side of Branch Daily Sales Sync. Reads confirmed daily sales summaries that branches publish to Kafka, validates them against the [message contract](contract/), and stores them in the HQ PostgreSQL database.
 
 | Folder | Content |
