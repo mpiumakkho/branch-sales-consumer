@@ -1,10 +1,12 @@
 # HQ side infrastructure: Kafka (single KRaft node), HQ PostgreSQL, optional Kafka UI.
 #
 # Networks
-#   hq   - HQ internal: Kafka internal listener, consumer, HQ DB
-#   wan  - simulates the internet path from branches: only Kafka's external listener is reachable
+#   hq   - HQ internal: Kafka (all listeners), consumer, HQ DB
+#   wan  - simulates the internet path from branches. The only HQ container on it is hq-edge, which forwards
+#          port 9094 to Kafka's external listener (like a firewall port forward). Kafka itself is not on wan,
+#          so its PLAINTEXT listeners cannot be reached from there.
 # Branch producers join `wan` only (their own `branch` network lives in the producer repo),
-# so a branch can reach Kafka but not the HQ DB or the consumer.
+# so a branch can reach Kafka's external listener but not the HQ DB, the consumer or Kafka's other listeners.
 
 name: branch-sales-hq
 
@@ -22,31 +24,64 @@ services:
       # INTERNAL: HQ services on `hq`   EXTERNAL: branches via `wan`   HOST: tools/IDE on this machine
       KAFKA_LISTENERS: INTERNAL://:19092,EXTERNAL://:9094,HOST://:9092,CONTROLLER://:9093
       KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:19092,EXTERNAL://kafka.hq.example:9094,HOST://localhost:${KAFKA_HOST_PORT:-9092}
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,HOST:PLAINTEXT,CONTROLLER:PLAINTEXT
+      # EXTERNAL (branches over the internet): TLS + SCRAM user per branch. The others are reachable only on the
+      # hq network or this machine and stay PLAINTEXT (see infra/README.md, Limits).
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:SASL_SSL,HOST:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_LISTENER_NAME_EXTERNAL_SSL_KEYSTORE_TYPE: PEM
+      KAFKA_LISTENER_NAME_EXTERNAL_SSL_KEYSTORE_LOCATION: /etc/kafka/tls/kafka.pem
+      KAFKA_LISTENER_NAME_EXTERNAL_SASL_ENABLED_MECHANISMS: SCRAM-SHA-512
+      # Env names: "." -> "_", "_" -> "__", "-" -> "___"  (listener.name.external.scram-sha-512.sasl.jaas.config)
+      KAFKA_LISTENER_NAME_EXTERNAL_SCRAM___SHA___512_SASL_JAAS_CONFIG: org.apache.kafka.common.security.scram.ScramLoginModule required;
+      # ACLs: a branch user may write only its own topic (infra/onboard-branch.sh). Clients on the PLAINTEXT
+      # listeners have no identity (User:ANONYMOUS) and are trusted as HQ-internal.
+      KAFKA_AUTHORIZER_CLASS_NAME: org.apache.kafka.metadata.authorizer.StandardAuthorizer
+      KAFKA_SUPER_USERS: User:ANONYMOUS
+      KAFKA_ALLOW_EVERYONE_IF_NO_ACL_FOUND: "false"
+      # Branch sessions log in again every 10 minutes. After offboard-branch.sh or a new password, an already
+      # open session ends at its next re-login instead of staying valid until it disconnects.
+      KAFKA_LISTENER_NAME_EXTERNAL_CONNECTIONS_MAX_REAUTH_MS: 600000
       KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
       KAFKA_LOG_DIRS: /var/lib/kafka/data
       # Single node: internal topics cannot have more than one replica
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
-      # Topics are created only by kafka-init, so a typo in a topic name fails instead of creating a new topic
+      # Topics are created only by kafka-init and onboard-branch.sh, so a typo in a topic name fails instead of
+      # creating a new topic
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
     ports:
-      - "${KAFKA_HOST_PORT:-9092}:9092"
+      # This machine only (HOST listener is PLAINTEXT, User:ANONYMOUS)
+      - "127.0.0.1:${KAFKA_HOST_PORT:-9092}:9092"
     volumes:
       - kafka-data:/var/lib/kafka/data
+      # Broker key + certificate from tls/generate-certs.sh. Only this file: the CA key is not needed here.
+      - ./tls/out/kafka.pem:/etc/kafka/tls/kafka.pem:ro
     networks:
-      hq: {}
-      wan:
-        aliases:
-          - kafka.hq.example
+      - hq
     healthcheck:
       test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
       interval: 10s
       timeout: 10s
       retries: 12
       start_period: 20s
+
+  # Stands in for the HQ firewall: the only HQ container on wan, forwarding TCP 9094 to Kafka's EXTERNAL listener.
+  # TLS passes through unchanged (config: edge/haproxy.cfg).
+  edge:
+    image: haproxy:3.2.25-alpine
+    container_name: hq-edge
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+    volumes:
+      - ./edge/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    networks:
+      hq: {}
+      wan:
+        aliases:
+          - kafka.hq.example
 
   kafka-init:
     image: apache/kafka:4.3.1
@@ -57,15 +92,13 @@ services:
     restart: "no"
     networks:
       - hq
-    # Same partition count on both topics: the dead-letter publisher writes to the same partition number as the source record.
-    # Retention: 14 days for data (consumer can be down over a long holiday), 30 days for dead letters (time to investigate).
+    # Creates the dead-letter topic only. Each branch's data topic (branch-sales.daily-summary.<branchCode>) is created
+    # when the branch is onboarded (onboard-branch.sh). Retention: 30 days for dead letters (time to investigate).
     entrypoint: ["/bin/bash", "-c"]
     command:
       - |
         set -e
         T=/opt/kafka/bin/kafka-topics.sh
-        $$T --bootstrap-server kafka:19092 --create --if-not-exists --topic branch-sales.daily-summary \
-          --partitions 6 --replication-factor 1 --config retention.ms=1209600000
         $$T --bootstrap-server kafka:19092 --create --if-not-exists --topic branch-sales.daily-summary.dlt \
           --partitions 6 --replication-factor 1 --config retention.ms=2592000000
         $$T --bootstrap-server kafka:19092 --list
@@ -79,7 +112,8 @@ services:
       POSTGRES_USER: hq_app
       POSTGRES_PASSWORD: ${HQ_DB_PASSWORD:?set HQ_DB_PASSWORD in infra/.env}
     ports:
-      - "${HQ_DB_PORT:-5433}:5432"
+      # This machine only
+      - "127.0.0.1:${HQ_DB_PORT:-5433}:5432"
     volumes:
       # PostgreSQL 18 images keep data under /var/lib/postgresql/<major>/docker
       - hq-db-data:/var/lib/postgresql
@@ -123,7 +157,8 @@ services:
       KAFKA_CLUSTERS_0_NAME: hq
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:19092
     ports:
-      - "${KAFKA_UI_PORT:-8088}:8080"
+      # This machine only (no login, full access through the INTERNAL listener)
+      - "127.0.0.1:${KAFKA_UI_PORT:-8088}:8080"
     networks:
       - hq
 

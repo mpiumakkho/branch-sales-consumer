@@ -11,3 +11,6 @@ target/
 .idea/
 *.iml
 .vscode/
+
+# Demo TLS keys and certificates (infra/tls/generate-certs.sh)
+infra/tls/out/
