@@ -14,3 +14,5 @@ target/
 
 # Demo TLS keys and certificates (infra/tls/generate-certs.sh)
 infra/tls/out/
+# HQ's Kafka password per branch (infra/onboard-branch.sh)
+infra/secrets/

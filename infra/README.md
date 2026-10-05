@@ -1,109 +1,81 @@
 # HQ infrastructure
 
-Kafka and the HQ database for local development and the demo, plus the HQ admin scripts for branch onboarding.
+The HQ database and the consumer for local development and the demo, the HQ certificate authority, and the HQ admin scripts for branch onboarding. Kafka runs at every branch (producer repo); HQ has no Kafka and no inbound port.
 
 | Service | Image | Purpose |
 |---|---|---|
-| `kafka` | `apache/kafka:4.3.1` | Single KRaft node (broker + controller) |
-| `edge` | `haproxy:3.2.25-alpine` | Stands in for the HQ firewall: the only HQ container on the `wan` network, forwards TCP 9094 to Kafka's `EXTERNAL` listener ([edge/haproxy.cfg](edge/haproxy.cfg)) |
-| `kafka-init` | `apache/kafka:4.3.1` | Creates the dead-letter topic, then exits |
 | `hq-db` | `postgres:18.6-alpine` | HQ database `hq_sales`. Tables are created by the consumer's migrations |
-| `consumer` | built from this repo (`../Dockerfile`) | The HQ consumer. Profile `consumer` |
-| `kafka-ui` | `ghcr.io/kafbat/kafka-ui:v1.5.0` | Optional, profile `tools` |
+| `consumer` | built from this repo (`../Dockerfile`) | The HQ consumer, profile `consumer`. The only HQ container on the `wan` network: it connects out to every branch |
 
 ## Run
 
 ```bash
 cd infra
 cp .env.example .env          # then set HQ_DB_PASSWORD
-tls/generate-certs.sh         # demo CA + broker certificate in tls/out/ (git-ignored)
-docker compose up -d
-docker compose ps             # kafka and hq-db healthy, kafka-init exited 0
+tls/generate-certs.sh         # HQ CA in tls/out/ (git-ignored)
+docker compose --profile consumer up -d --build
+docker compose ps             # hq-db healthy, hq-consumer up
 ./smoke-test.sh
-
-docker compose --profile consumer up -d --build # the consumer as well (otherwise run it from the IDE)
-docker compose --profile tools up -d kafka-ui   # optional, http://localhost:8088
 ```
 
-Stop with `docker compose down`. Add `-v` to delete Kafka and DB data.
+Without `--profile consumer` only the database starts (for running the consumer from the IDE). Stop with `docker compose --profile consumer down`; add `-v` to delete the DB data.
 
 ## Onboarding a branch
 
 ```bash
-BRANCH_KAFKA_PASSWORD=... ./onboard-branch.sh BR0001 "Branch 1"
+HQ_KAFKA_PASSWORD=... ./onboard-branch.sh BR0001 "Branch 1"
 ```
 
 | Step | What |
 |---|---|
-| 1 | Kafka user `BR0001` (SCRAM-SHA-512) with that password |
-| 2 | topic `branch-sales.daily-summary.BR0001` (1 partition, 14 days retention) |
-| 3 | ACL: user `BR0001` may write (and describe) this topic only |
-| 4 | quota `producer_byte_rate` = 10240 bytes/s for user `BR0001` (`BRANCH_PRODUCER_BYTE_RATE` to change it). A branch sends a few KB per hour; a faulty producer that keeps sending is slowed down without affecting other branches |
-| 5 | `BR0001` in the HQ `branch` table |
+| 1 | broker certificate for `kafka.br0001.example` (the branch's host name on the WAN), signed by the HQ CA: `tls/out/branches/BR0001/kafka.pem` |
+| 2 | HQ's password at that branch's broker, in `secrets/branch-kafka/BR0001` (git-ignored, read by the consumer) |
+| 3 | `BR0001` in the HQ `branch` table with `kafka_bootstrap = kafka.br0001.example:9094` (`BRANCH_KAFKA_PORT` to change the port) |
 
-The password must be 8–128 characters from `A-Z a-z 0-9 . _ ~ -` (no quoting needed in the Kafka and producer configuration). The branch gets its code, the password and `tls/out/ca.crt`. The consumer picks up the new topic within a minute (topic pattern, `metadata.max.age.ms`). Running the script again sets a new password and quota and skips what exists.
+The password must be 8–128 characters from `A-Z a-z 0-9 . _ ~ -` (no quoting needed in the Kafka configuration or a `.env` file). Hand the branch its `kafka.pem` and the same password: the branch's `kafka-init` creates user `hq` with it and the ACLs that let HQ read summaries and write receipts, and nothing else. The consumer connects within a minute of the registry change (`BRANCH_REGISTRY_REFRESH_MS`); until the branch is up, `docker logs hq-consumer` shows `Cannot connect to branch BR0001` once a minute. Running the script again renews the certificate, replaces the password and updates the registry row.
 
 ```bash
-./offboard-branch.sh BR0001    # credentials leaked or branch closed
+./offboard-branch.sh BR0001    # branch closed, or HQ's password at the branch leaked
 ```
 
-Closing a branch: HQ still accepts its back-dated sales (duplicates are skipped by revision), so offboard only after the branch has nothing pending (no `CONFIRMED` day without a `SENT` row in its `sync_log`). Offboarding removes the ACLs, so the branch's next write is refused even on an open connection, and deletes the SCRAM credentials, so it cannot log in again. Branch sessions must log in again every 10 minutes (`connections.max.reauth.ms` on `EXTERNAL`), so a session opened with an old password ends within 10 minutes, also when the branch is onboarded again with a new password. The topic, the HQ branch row and the stored sales stay. To give access back, onboard again with a new password.
+Offboarding clears the branch's address in the registry (the consumer disconnects within a minute) and deletes HQ's password file. The branch row and the stored sales stay (Q6). Records the branch has not sent yet stay in its own Kafka, so offboard a closing branch only after its producer shows nothing pending (`demo/sync-state.sh` in the producer repo). If the password leaked, the branch also removes user `hq` at its broker or sets a new one (its `kafka-init`). To read from the branch again, onboard it again.
 
 ## Networks
 
 ```
-         branch-sales-wan                               branch-sales-hq
- ┌───────────────────────────────┐      ┌───────────────────────────────────────────┐
- │ branch producer(s)            │      │                                           │
- │     │ TLS + SCRAM             │      │   kafka :9094 EXTERNAL   consumer   hq-db │
- │     └─► kafka.hq.example:9094 ┼─ hq-edge ─► ▲                    │              │
- │         (hq-edge, port 9094)  │      │   kafka :19092 INTERNAL ◄┘              │
- └───────────────────────────────┘      └───────────────────────────────────────────┘
+ branch-br0001 (branch network)        branch-sales-wan                 branch-sales-hq
+ ┌──────────────────────────────┐   ┌─────────────────────────┐   ┌──────────────────────┐
+ │ producer ─► kafka :19092     │   │                         │   │                      │
+ │ mongodb     kafka :9094 ◄────┼── edge (kafka.br0001.example:9094) ◄── consumer ─► hq-db │
+ │ branch-db   (SASL_SSL)       │   │  TLS passes through     │   │                      │
+ └──────────────────────────────┘   └─────────────────────────┘   └──────────────────────┘
 ```
 
-- `branch-sales-hq`: Kafka (all listeners), the consumer, the HQ DB, and `hq-edge`.
-- `branch-sales-wan`: stands in for the internet. The only HQ container on it is `hq-edge`, under the alias `kafka.hq.example`. It forwards port 9094 and nothing else, like a firewall port forward. TLS passes through it unchanged.
-- Kafka is not on `branch-sales-wan`, so the `PLAINTEXT` listeners cannot be reached from there. `smoke-test.sh` checks this.
-- Branch producers join `branch-sales-wan` (as an external network) plus their own branch network. They can reach `kafka.hq.example:9094` but cannot resolve `hq-db` or `kafka`.
+- `branch-sales-hq`: the consumer and the HQ DB.
+- `branch-sales-wan`: stands in for the internet. HQ's only container on it is the consumer, which connects out. There is no HQ port on it: `smoke-test.sh` checks that `hq-db` cannot be resolved from `wan` and that no other HQ container is on it.
+- Each branch joins `wan` with its edge only (alias `kafka.<branch>.example`), which forwards port 9094 to the branch broker's `SASL_SSL` listener. The branch side is described in the producer repo.
 
-## Kafka listeners
+## HQ's access at a branch broker
 
-| Listener | Address clients use | Security | Used by |
-|---|---|---|---|
-| `EXTERNAL` | `kafka.hq.example:9094` (through `hq-edge`) | `SASL_SSL`: TLS (certificate for `kafka.hq.example`, signed by the demo CA) + SCRAM-SHA-512 user per branch, re-login every 10 minutes | branch producers (network `wan`) |
-| `INTERNAL` | `kafka:19092` | `PLAINTEXT` | consumer, kafka-ui, kafka-init (network `hq`) |
-| `HOST` | `localhost:9092` (published on `127.0.0.1` only) | `PLAINTEXT` | apps run from an IDE and the admin scripts (inside the broker container) |
-| `CONTROLLER` | `kafka:9093` | `PLAINTEXT` | KRaft only |
-
-ACLs are on (`StandardAuthorizer`, nothing allowed without an ACL). Clients on the `PLAINTEXT` listeners have no identity (`User:ANONYMOUS`), which is a super user, so HQ services need no ACLs.
+| | |
+|---|---|
+| Address | `kafka.<branch code in lower case>.example:9094`, through the branch's edge |
+| Security | `SASL_SSL`: TLS with the branch broker certificate signed by the HQ CA, host name verified; SCRAM-SHA-512 user `hq`, re-login every 10 minutes |
+| ACLs (set by the branch) | Read + Describe `branch-sales.daily-summary`, Write + Describe `branch-sales.receipt`, Read group `hq-branch-sales-consumer` |
 
 ## Smoke test
 
-`./smoke-test.sh` uses a temporary Kafka user and temporary topics (removed at the end) and checks:
+`./smoke-test.sh` checks:
 
-1. the dead-letter topic exists
-2. a client on `wan` with valid credentials can write over TLS + SCRAM to the topic its ACL allows
-3. an HQ client on `hq` reads that record through `INTERNAL`
-4. the same client is refused (`TopicAuthorizationException`) on a topic its ACL does not allow
-5. a wrong password is refused (`SaslAuthenticationException`)
-6. a client without TLS/SASL cannot use `EXTERNAL`
-7. a client on `wan` cannot resolve `hq-db`
-8. a client on `wan` cannot resolve `kafka` or connect to ports 19092, 9092, 9093 (only 9094 is forwarded)
+1. the HQ DB accepts connections
+2. a client on `wan` cannot resolve `hq-db`
+3. no HQ container other than the consumer is on `wan`
 
-## Topics
-
-| Topic | Created by | Partitions | Retention |
-|---|---|---|---|
-| `branch-sales.daily-summary.<branchCode>` | `onboard-branch.sh` | 1 | 14 days |
-| `branch-sales.daily-summary.dlt` | `kafka-init` | 6 | 30 days |
-
-Auto topic creation is off. See [`../contract/`](../contract/) for the message format.
-
-Upgrading a Kafka volume from before one-topic-per-branch: the shared topic `branch-sales.daily-summary` is no longer created or read. Let the old consumer finish reading it, then delete it (`docker exec hq-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --delete --topic branch-sales.daily-summary`).
+Each branch has its own smoke test (`smoke-test.sh` in the producer repo), run from `wan` as HQ would connect.
 
 ## Limits of this setup
 
-- One Kafka node, replication factor 1: no broker fault tolerance. Fine for development; production needs at least 3 nodes with `min.insync.replicas=2`.
-- `INTERNAL` and `HOST` are `PLAINTEXT` with `User:ANONYMOUS` as super user. They are reachable only from the HQ network and from this machine (`127.0.0.1`), because Kafka is not on `wan` and the published ports are bound to loopback. Anything that gets onto the HQ network has full Kafka access; production should give HQ services their own credentials (or mTLS) too.
-- The CA and the broker key are created by a script, and the broker key is not encrypted (readable by all users on this machine, because the broker runs as uid 1000 in its container). Only `kafka.pem` is mounted into the broker; the CA key stays in `tls/out/`. Production uses the organisation's CA and a secret store.
-- Branch passwords are passed to the scripts as environment variables, appear on the `docker exec` command line while `onboard-branch.sh` runs (visible to local admins in the process list), and end up in each branch's `.env`. Production would hand them over through a secret store.
+- The branch broker key is created at HQ (`tls/generate-certs.sh BR0001`) and handed over with the certificate. Production would have the branch create its key and send a certificate request, so the key never leaves the branch, and would use the organisation's CA. The keys are not encrypted.
+- Passwords are passed to the scripts as environment variables and stored as plain files in `secrets/branch-kafka/` (readable by the consumer container's non-root user, so by every user on this machine). Production would use a secret store.
+- The consumer opens one consumer and one producer client per branch in one JVM. For thousands of branches, run several consumer instances, each with its own part of the registry; this is not implemented.
+- One HQ database instance, no replica.
