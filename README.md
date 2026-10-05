@@ -32,6 +32,7 @@ branch registry (table branch, kafka_bootstrap)  ──► one listener containe
 - Revisions (rules R4–R6): one `INSERT ... ON CONFLICT DO UPDATE ... WHERE stored.revision < incoming.revision`. A higher revision replaces the header and all lines; the same revision is `DUPLICATE`; a lower one is `STALE` (logged at WARN). Neither is a rejection.
 - Any other failure (HQ database or the branch broker unreachable) is retried with exponential back-off (1 s up to 60 s) and no attempt limit, per branch. Records before the failed one are committed; that branch waits at the failed record and nothing is skipped. Other branches are not affected: each has its own container and thread.
 - Branches are connected from the registry: a row with a `kafka_bootstrap` address is connected within a minute, a cleared address disconnects, a changed address reconnects. A branch that cannot be connected yet (host name not resolvable, password file missing) is tried again at every refresh. See [infra/README.md](infra/README.md#onboarding-a-branch).
+- Several consumer instances can share the branches: each instance is started with a shard name (`CONSUMER_SHARD`) and reads only the branches whose registry row has that shard (`infra/onboard-branch.sh`, `BRANCH_SHARD`). Moving a branch to another shard in the registry moves it between instances within a minute. Replays of rejected records are done by the instance that reads the branch.
 
 ## Replaying rejected records
 
@@ -49,7 +50,7 @@ Flyway migrations in [`src/main/resources/db/migration`](src/main/resources/db/m
 
 | Table | Content |
 |---|---|
-| `branch` | Branch registry: code, name, and `kafka_bootstrap` (the address HQ reads the branch at; null = not read). Set by `infra/onboard-branch.sh` / `offboard-branch.sh` |
+| `branch` | Branch registry: code, name, `kafka_bootstrap` (the address HQ reads the branch at; null = not read) and `shard` (which consumer instance reads it). Set by `infra/onboard-branch.sh` / `offboard-branch.sh` |
 | `category` | Standard categories from [`contract/categories.md`](contract/categories.md), seeded by `V2` |
 | `branch_daily_sales` | One row per `(branch_code, sale_date)` with the highest revision received, its `event_id`, `confirmed_at` and `received_at` |
 | `branch_daily_sales_line` | Category lines of that revision |
@@ -86,6 +87,7 @@ Configuration (environment variables):
 | `BRANCH_KAFKA_SECURITY_PROTOCOL` | `SASL_SSL` | how every branch broker is reached: TLS + SCRAM-SHA-512 as user `hq`. `PLAINTEXT` for tests only |
 | `BRANCH_KAFKA_TRUSTSTORE` | `/certs/ca.crt` | the HQ CA certificate (PEM) that signs every branch broker certificate; host names are verified |
 | `BRANCH_KAFKA_PASSWORD_DIR` | `/run/secrets/branch-kafka` | one file per branch code with HQ's password at that branch (written by `onboard-branch.sh`) |
+| `CONSUMER_SHARD` | `default` | this instance reads the branches whose `branch.shard` is this value (`a-z 0-9 -`, up to 30 characters) |
 | `BRANCH_REGISTRY_REFRESH_MS` | `60000` | how often the registry is read to connect or disconnect branches |
 | `DEAD_LETTER_REPLAY_INTERVAL_MS` | `30000` | how often replay requests are looked for |
 | `CONSUMER_MAX_POLL_RECORDS` | `100` | records per poll and branch; limits load on the HQ DB |
@@ -103,5 +105,5 @@ Needs Docker. The tests start a PostgreSQL container and one Kafka container per
 | Test | Checks |
 |---|---|
 | `SummaryValidatorTest` | every file in `contract/examples/` gets its expected result from the parse, schema, identity and business layers; layer order; edge cases (not JSON, repeated key, formats, out-of-range numbers) |
-| `DailySummaryFlowTest` | through two branch brokers: valid examples stored, every invalid example in `dead_letter` with unchanged bytes and a `REJECTED` receipt with the right reason, one receipt per record matched by source offset (checked against the receipt schema), `BRANCH_MISMATCH` / `KEY_MISMATCH`, revision rules R4–R6 with their receipts, replay of a dead letter after the cause is fixed, following the registry (offboard, onboard, a branch that cannot be connected yet) |
+| `DailySummaryFlowTest` | through two branch brokers: valid examples stored, every invalid example in `dead_letter` with unchanged bytes and a `REJECTED` receipt with the right reason, one receipt per record matched by source offset (checked against the receipt schema), `BRANCH_MISMATCH` / `KEY_MISMATCH`, revision rules R4–R6 with their receipts, replay of a dead letter after the cause is fixed, following the registry (offboard, onboard, a branch in another shard, a branch that cannot be connected yet) |
 | `DatabaseFailureTest` | a database error is retried until the record is stored, with exactly one receipt and no dead letter |

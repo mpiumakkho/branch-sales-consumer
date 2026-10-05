@@ -30,7 +30,7 @@ HQ_KAFKA_PASSWORD=... ./onboard-branch.sh BR0001 "Branch 1"
 |---|---|
 | 1 | broker certificate for `kafka.br0001.example` (the branch's host name on the WAN), signed by the HQ CA: `tls/out/branches/BR0001/kafka.pem` |
 | 2 | HQ's password at that branch's broker, in `secrets/branch-kafka/BR0001` (git-ignored, read by the consumer) |
-| 3 | `BR0001` in the HQ `branch` table with `kafka_bootstrap = kafka.br0001.example:9094` (`BRANCH_KAFKA_PORT` to change the port) |
+| 3 | `BR0001` in the HQ `branch` table with `kafka_bootstrap = kafka.br0001.example:9094` (`BRANCH_KAFKA_PORT` to change the port) and `shard = default` (`BRANCH_SHARD` to assign the branch to another consumer instance) |
 
 The password must be 8–128 characters from `A-Z a-z 0-9 . _ ~ -` (no quoting needed in the Kafka configuration or a `.env` file). Hand the branch its `kafka.pem` and the same password: the branch's `kafka-init` creates user `hq` with it and the ACLs that let HQ read summaries and write receipts, and nothing else. The consumer connects within a minute of the registry change (`BRANCH_REGISTRY_REFRESH_MS`); until the branch is up, `docker logs hq-consumer` shows `Cannot connect to branch BR0001` once a minute. Running the script again renews the certificate, replaces the password and updates the registry row.
 
@@ -77,5 +77,5 @@ Each branch has its own smoke test (`smoke-test.sh` in the producer repo), run f
 
 - The branch broker key is created at HQ (`tls/generate-certs.sh BR0001`) and handed over with the certificate. Production would have the branch create its key and send a certificate request, so the key never leaves the branch, and would use the organisation's CA. The keys are not encrypted.
 - Passwords are passed to the scripts as environment variables and stored as plain files in `secrets/branch-kafka/` (readable by the consumer container's non-root user, so by every user on this machine). Production would use a secret store.
-- The consumer opens one consumer and one producer client per branch in one JVM. For thousands of branches, run several consumer instances, each with its own part of the registry; this is not implemented.
+- The consumer opens one consumer and one producer client per branch. For thousands of branches, run several consumer instances with different `CONSUMER_SHARD` values and spread the branches over them with `BRANCH_SHARD` when onboarding (or `update branch set shard = ...`). The compose file here runs one instance.
 - One HQ database instance, no replica.
