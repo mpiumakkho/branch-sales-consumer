@@ -43,9 +43,6 @@ jobs:
             sleep 5
           done
           docker inspect -f '{{.State.Health.Status}}' hq-db | grep -qx healthy || { docker compose logs; exit 1; }
-          # The consumer's migrations create the tables; run them once without starting the consumer
-          docker compose --profile consumer run --rm --no-deps -e SPRING_MAIN_WEB_APPLICATION_TYPE=none \
-            --entrypoint sh consumer -c 'true' || true
       - run: ./smoke-test.sh
       - name: Onboard and offboard a branch
         run: |

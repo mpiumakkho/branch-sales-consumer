@@ -29,7 +29,10 @@ if [[ $# -eq 0 ]]; then
   # The consumer runs as a non-root user in its container and must read ca.crt; the CA key is never mounted
   chmod 644 ca.crt
   chmod 600 ca.key
-  echo "created tls/out/ca.crt, tls/out/ca.key"
+  # Created here, before docker compose mounts it into the consumer: a directory Docker creates for a bind mount is
+  # owned by root on Linux, and onboard-branch.sh could then not write password files into it
+  mkdir -p ../../secrets/branch-kafka
+  echo "created tls/out/ca.crt, tls/out/ca.key, secrets/branch-kafka/"
   exit 0
 fi
 
