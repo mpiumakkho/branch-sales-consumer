@@ -70,8 +70,8 @@ Until the branches are up, `docker logs hq-consumer` shows `Cannot connect to br
 cp branch-sales-producer/.env.example branch-sales-producer/.env
 # in branch-sales-producer/.env: the four passwords, BR0001_HQ_KAFKA_PASSWORD=pw-hq-at-br0001, BR0002_HQ_KAFKA_PASSWORD=pw-hq-at-br0002
 # (the *_KAFKA_PEM paths in .env.example already point at the certificates onboard-branch.sh created)
-(cd branch-sales-producer && docker compose -f docker-compose.yml -f demo/BR0001.compose.yaml up -d --build)
-(cd branch-sales-producer && docker compose -f docker-compose.yml -f demo/BR0002.compose.yaml up -d)
+(cd branch-sales-producer && docker compose -f docker-compose.yml -f demo-branches/BR0001.compose.yaml up -d --build)
+(cd branch-sales-producer && docker compose -f docker-compose.yml -f demo-branches/BR0002.compose.yaml up -d)
 (cd branch-sales-producer && HQ_KAFKA_PASSWORD=pw-hq-at-br0001 ./smoke-test.sh BR0001 ../branch-sales-consumer/infra/tls/out/ca.crt)
 (cd branch-sales-producer && HQ_KAFKA_PASSWORD=pw-hq-at-br0002 ./smoke-test.sh BR0002 ../branch-sales-consumer/infra/tls/out/ca.crt)
 ```
@@ -133,7 +133,7 @@ The day contains `C99`, which is not in BR0002's mapping. The producer does not 
 Fix the mapping (add `C99: OTHER` to `branch-sales-producer/demo-branches/BR0002/branch.yaml`) and restart the producer:
 
 ```bash
-(cd branch-sales-producer && docker compose -f docker-compose.yml -f demo/BR0002.compose.yaml restart producer)
+(cd branch-sales-producer && docker compose -f docker-compose.yml -f demo-branches/BR0002.compose.yaml restart producer)
 ```
 
 The next round sends it and HQ stores it (`HQ_ACCEPTED`, `OTHER 500.00 x5` at HQ). Undo the mapping change afterwards if you want to run this scenario again.
@@ -180,7 +180,7 @@ Messages that fail other contract checks (not JSON, schema, totals, wrong branch
 Cut BR0002 off from the WAN by stopping its edge, then confirm a day:
 
 ```bash
-(cd branch-sales-producer && docker compose -f docker-compose.yml -f demo/BR0002.compose.yaml stop edge)
+(cd branch-sales-producer && docker compose -f docker-compose.yml -f demo-branches/BR0002.compose.yaml stop edge)
 branch-sales-producer/demo-branches/sql.sh BR0002 branch-sales-producer/demo-branches/BR0002/03-next-day.sql
 ```
 
@@ -193,7 +193,7 @@ The producer's next round still succeeds, because it writes to the broker in the
 Reconnect:
 
 ```bash
-(cd branch-sales-producer && docker compose -f docker-compose.yml -f demo/BR0002.compose.yaml start edge)
+(cd branch-sales-producer && docker compose -f docker-compose.yml -f demo-branches/BR0002.compose.yaml start edge)
 ```
 
 HQ's client for BR0002 finds the broker again, reads the waiting record and answers; the branch shows `HQ_ACCEPTED`. Nothing was sent twice: the record waited in the branch's Kafka. If the branch's broker had lost it (a `SENT` day without a receipt after `SEND_RESEND_AFTER`, 24 hours by default), the producer would send it again, and HQ would answer `DUPLICATE` if it had stored it after all.
@@ -213,7 +213,7 @@ The branch sends as usual, into its own broker, and waits for a receipt (`2026-1
 ```bash
 HQ_KAFKA_PASSWORD=pw-hq-at-br0001-new branch-sales-consumer/infra/onboard-branch.sh BR0001 "Demo branch 1"
 # in branch-sales-producer/.env: BR0001_HQ_KAFKA_PASSWORD=pw-hq-at-br0001-new
-(cd branch-sales-producer && docker compose -f docker-compose.yml -f demo/BR0001.compose.yaml up -d kafka-init)
+(cd branch-sales-producer && docker compose -f docker-compose.yml -f demo-branches/BR0001.compose.yaml up -d kafka-init)
 ```
 
 Within a minute the consumer connects again, reads the waiting day and HQ stores it; the branch shows `HQ_ACCEPTED`. The branch's broker kept its certificate, which is still valid; onboarding also wrote a renewed one, which the branch would mount at its next broker restart.
@@ -221,8 +221,8 @@ Within a minute the consumer connects again, reads the waiting day and HQ stores
 ## 4. Stop and reset
 
 ```bash
-(cd branch-sales-producer && docker compose -f docker-compose.yml -f demo/BR0001.compose.yaml down -v)
-(cd branch-sales-producer && docker compose -f docker-compose.yml -f demo/BR0002.compose.yaml down -v)
+(cd branch-sales-producer && docker compose -f docker-compose.yml -f demo-branches/BR0001.compose.yaml down -v)
+(cd branch-sales-producer && docker compose -f docker-compose.yml -f demo-branches/BR0002.compose.yaml down -v)
 (cd branch-sales-consumer/infra && docker compose --profile consumer down -v)
 ```
 

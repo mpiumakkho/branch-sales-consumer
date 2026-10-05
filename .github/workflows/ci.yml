@@ -46,7 +46,7 @@ jobs:
       - run: ./smoke-test.sh
       - name: Onboard and offboard a branch
         run: |
-          # The registry table comes from the consumer's migration V4; create the minimum here, as the consumer would
+          # The registry table comes from the consumer's migrations V4 and V6; create the minimum here, as the consumer would
           docker exec -i hq-db psql -U hq_app -d hq_sales -v ON_ERROR_STOP=1 <<'SQL'
           create table if not exists branch (branch_code varchar(10) primary key, name varchar(200) not null,
             created_at timestamptz not null default now(), kafka_bootstrap varchar(255),
