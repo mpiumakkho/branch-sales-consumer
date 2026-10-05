@@ -35,7 +35,7 @@ public class ReferenceChecker {
 				.single();
 		if (!branchExists) {
 			throw new RejectedMessageException(RejectReason.UNKNOWN_BRANCH,
-					"branchCode " + summary.branchCode() + " is not in the branch registry");
+					"branchCode " + summary.branchCode() + " is not in the branch registry", summary);
 		}
 
 		Set<String> codes = summary.lines().stream().map(SalesLine::categoryCode).collect(Collectors.toSet());
@@ -46,7 +46,7 @@ public class ReferenceChecker {
 				.set());
 		if (!unknown.isEmpty()) {
 			throw new RejectedMessageException(RejectReason.UNKNOWN_CATEGORY,
-					"categoryCode " + unknown + " is not in the category table");
+					"categoryCode " + unknown + " is not in the category table", summary);
 		}
 	}
 }

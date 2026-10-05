@@ -1,0 +1,7 @@
+# Test branches are Testcontainers brokers without TLS or SASL; the registry and replay run often so tests stay short
+branch-sales:
+  branch-kafka:
+    security-protocol: PLAINTEXT
+    registry-refresh-ms: 500
+  dead-letter:
+    replay-interval-ms: 500

@@ -113,38 +113,38 @@ class SummaryValidatorTest {
 	}
 
 	@Test
-	void rejectsBranchCodeThatIsNotTheTopicBranch() {
-		assertThatThrownBy(() -> validator.validate(ContractExamples.topicOf("BR0002"), "BR0001",
+	void rejectsBranchCodeThatIsNotTheClusterBranch() {
+		assertThatThrownBy(() -> validator.validate("BR0002", "BR0001",
 				ContractExamples.read("valid/basic.json")))
 				.isInstanceOf(RejectedMessageException.class)
-				.hasMessage("BRANCH_MISMATCH: branchCode BR0001 sent on the topic of branch BR0002");
+				.hasMessage("BRANCH_MISMATCH: branchCode BR0001 read from the Kafka of branch BR0002");
 	}
 
 	@Test
 	void rejectsKeyThatIsNotTheBranchCode() {
 		byte[] value = ContractExamples.read("valid/basic.json");
-		assertThatThrownBy(() -> validator.validate(ContractExamples.topicOf("BR0001"), "BR0002", value))
+		assertThatThrownBy(() -> validator.validate("BR0001", "BR0002", value))
 				.hasMessage("KEY_MISMATCH: record key 'BR0002', branchCode BR0001");
-		assertThatThrownBy(() -> validator.validate(ContractExamples.topicOf("BR0001"), null, value))
+		assertThatThrownBy(() -> validator.validate("BR0001", null, value))
 				.hasMessage("KEY_MISMATCH: record key missing, branchCode BR0001");
 	}
 
 	@Test
 	void identityIsCheckedAfterSchemaAndBeforeBusinessRules() {
-		// Schema error wins over a wrong topic
-		assertThatThrownBy(() -> validator.validate(ContractExamples.topicOf("BR0002"), "BR0001",
+		// Schema error wins over a wrong branch
+		assertThatThrownBy(() -> validator.validate("BR0002", "BR0001",
 				ContractExamples.read("invalid-schema/revision-zero.json")))
 				.extracting(e -> ((RejectedMessageException) e).reason()).isEqualTo(RejectReason.SCHEMA_INVALID);
-		// A wrong topic wins over a business error
-		assertThatThrownBy(() -> validator.validate(ContractExamples.topicOf("BR0002"), "BR0001",
+		// A wrong branch wins over a business error
+		assertThatThrownBy(() -> validator.validate("BR0002", "BR0001",
 				ContractExamples.read("invalid-business/total-mismatch.json")))
 				.extracting(e -> ((RejectedMessageException) e).reason()).isEqualTo(RejectReason.BRANCH_MISMATCH);
 	}
 
-	/** Validates as the branch in the value would send it: on its own topic, key = branchCode. */
+	/** Validates as read from the cluster of the branch in the value, key = branchCode. */
 	private DailySalesSummary validate(byte[] value) {
 		String branch = ContractExamples.branchCodeOf(value);
-		return validator.validate(ContractExamples.topicOf(branch), branch, value);
+		return validator.validate(branch, branch, value);
 	}
 
 	private void assertRejected(byte[] value, RejectReason reason) {

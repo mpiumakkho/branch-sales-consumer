@@ -72,15 +72,15 @@ public class SummaryValidator {
 	}
 
 	/**
-	 * @param topic the topic the record was read from: {@code branch-sales.daily-summary.<branchCode>}
-	 * @param key   the record key
+	 * @param branchCode the branch whose Kafka cluster the record was read from (branch registry)
+	 * @param key        the record key
 	 * @throws RejectedMessageException if the record fails a parse, schema, identity or business check
 	 */
-	public DailySalesSummary validate(String topic, String key, byte[] value) {
+	public DailySalesSummary validate(String branchCode, String key, byte[] value) {
 		JsonNode root = parse(value);
 		checkSchema(root);
 		DailySalesSummary summary = toSummary(root);
-		checkIdentity(summary, topic, key);
+		checkIdentity(summary, branchCode, key);
 		checkTotal(summary);
 		checkUniqueCategories(summary);
 		return summary;
@@ -152,19 +152,18 @@ public class SummaryValidator {
 	}
 
 	/**
-	 * Only the branch's own SCRAM user may write its topic (ACL set by infra/onboard-branch.sh), so the topic suffix
-	 * identifies the sender (requirements Q5). The key decides the partition and so the order of a branch's records (Q7).
+	 * HQ reaches each branch's Kafka through the address registered for that branch, so the cluster identifies the
+	 * sender (requirements Q5, §16.3). The key must still be the branch code (Q7).
 	 */
-	private static void checkIdentity(DailySalesSummary summary, String topic, String key) {
-		// The listener's topic pattern guarantees the suffix after the last dot is a branch code
-		String topicBranch = topic.substring(topic.lastIndexOf('.') + 1);
-		if (!topicBranch.equals(summary.branchCode())) {
+	private static void checkIdentity(DailySalesSummary summary, String branchCode, String key) {
+		if (!branchCode.equals(summary.branchCode())) {
 			throw new RejectedMessageException(RejectReason.BRANCH_MISMATCH,
-					"branchCode " + summary.branchCode() + " sent on the topic of branch " + topicBranch);
+					"branchCode " + summary.branchCode() + " read from the Kafka of branch " + branchCode, summary);
 		}
 		if (!summary.branchCode().equals(key)) {
 			throw new RejectedMessageException(RejectReason.KEY_MISMATCH,
-					"record key " + (key == null ? "missing" : "'" + key + "'") + ", branchCode " + summary.branchCode());
+					"record key " + (key == null ? "missing" : "'" + key + "'") + ", branchCode " + summary.branchCode(),
+					summary);
 		}
 	}
 
@@ -174,7 +173,7 @@ public class SummaryValidator {
 				.reduce(BigDecimal.ZERO, BigDecimal::add);
 		if (summary.totalAmount().compareTo(sum) != 0) {
 			throw new RejectedMessageException(RejectReason.TOTAL_MISMATCH,
-					"totalAmount " + summary.totalAmount() + " but lines sum to " + sum);
+					"totalAmount " + summary.totalAmount() + " but lines sum to " + sum, summary);
 		}
 	}
 
@@ -187,7 +186,8 @@ public class SummaryValidator {
 			}
 		}
 		if (!duplicates.isEmpty()) {
-			throw new RejectedMessageException(RejectReason.DUPLICATE_CATEGORY, "repeated categoryCode " + duplicates);
+			throw new RejectedMessageException(RejectReason.DUPLICATE_CATEGORY, "repeated categoryCode " + duplicates,
+					summary);
 		}
 	}
 }

@@ -16,11 +16,6 @@ public final class ContractExamples {
 	private static final Path ROOT = Path.of("contract", "examples");
 	private static final Pattern BRANCH_CODE = Pattern.compile("\"branchCode\"\\s*:\\s*\"([^\"]*)\"");
 
-	/** Topic of a branch, as created by infra/onboard-branch.sh. */
-	public static String topicOf(String branchCode) {
-		return "branch-sales.daily-summary." + branchCode;
-	}
-
 	/** The branchCode in a message value, or BR0001 if there is none (e.g. not JSON): the branch a producer would send it as. */
 	public static String branchCodeOf(byte[] value) {
 		Matcher m = BRANCH_CODE.matcher(new String(value == null ? new byte[0] : value, StandardCharsets.UTF_8));

@@ -31,11 +31,12 @@ public class DailySummaryProcessor {
 	}
 
 	/**
+	 * @param branchCode the branch whose Kafka cluster the record was read from
 	 * @return the stored outcome; the transaction is committed when this returns
 	 * @throws RejectedMessageException if the value fails a contract check
 	 */
-	public Processed process(String topic, String key, byte[] value) {
-		DailySalesSummary summary = validator.validate(topic, key, value);
+	public Processed process(String branchCode, String key, byte[] value) {
+		DailySalesSummary summary = validator.validate(branchCode, key, value);
 		DailySalesStore.Result result = transaction.execute(status -> {
 			referenceChecker.check(summary);
 			return store.apply(summary);

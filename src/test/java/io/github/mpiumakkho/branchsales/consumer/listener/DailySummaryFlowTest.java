@@ -4,45 +4,39 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 import java.math.BigDecimal;
-import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.LocalDate;
-import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
-import org.apache.kafka.clients.consumer.ConsumerConfig;
-import org.apache.kafka.clients.consumer.ConsumerRecord;
-import org.apache.kafka.clients.consumer.KafkaConsumer;
-import org.apache.kafka.common.TopicPartition;
-import org.apache.kafka.common.header.Header;
-import org.apache.kafka.common.serialization.ByteArrayDeserializer;
-import org.apache.kafka.common.serialization.StringDeserializer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
-import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.test.context.ActiveProfiles;
 import org.testcontainers.kafka.KafkaContainer;
+import tools.jackson.databind.JsonNode;
 
 import io.github.mpiumakkho.branchsales.consumer.ContractExamples;
+import io.github.mpiumakkho.branchsales.consumer.TestBranch;
 import io.github.mpiumakkho.branchsales.consumer.TestcontainersConfiguration;
 import io.github.mpiumakkho.branchsales.consumer.exception.RejectReason;
 
 /**
- * Sends the contract example files through Kafka and checks what ends up in
- * the HQ database and in the dead-letter topic.
+ * Sends the contract example files through the Kafka brokers of two branches and checks what ends up in the HQ
+ * database, in dead_letter, and in the receipts each branch gets back.
  */
 @SpringBootTest
+@ActiveProfiles("test")
 @Import(TestcontainersConfiguration.class)
 class DailySummaryFlowTest {
 
@@ -50,72 +44,83 @@ class DailySummaryFlowTest {
 	private static final LocalDate SALE_DATE = LocalDate.of(2026, 10, 1);
 
 	@Autowired
-	KafkaTemplate<String, byte[]> kafka;
-
-	@Autowired
 	JdbcClient jdbc;
 
-	// Not ${spring.kafka.bootstrap-servers}: @ServiceConnection does not set that property, so it would resolve to the
-	// application.yaml default (the local infra Kafka) instead of the test container
 	@Autowired
-	KafkaContainer kafkaContainer;
+	BranchListeners listeners;
 
-	@Value("${branch-sales.kafka.dead-letter-topic}")
-	String deadLetterTopic;
+	@Autowired
+	@Qualifier("br0001Kafka")
+	KafkaContainer br0001Kafka;
 
-	private KafkaConsumer<String, byte[]> deadLetterReader;
+	@Autowired
+	@Qualifier("br0002Kafka")
+	KafkaContainer br0002Kafka;
+
+	private TestBranch br0001;
+	private TestBranch br0002;
 
 	@BeforeEach
 	void setUp() {
-		// Branch registry as assumed by contract/README.md: BR0001 and BR0002 exist, BR9999 does not
-		jdbc.sql("""
-				insert into branch (branch_code, name) values ('BR0001', 'Test branch 1'), ('BR0002', 'Test branch 2')
-				on conflict do nothing
-				""").update();
 		jdbc.sql("delete from branch_daily_sales").update();
-		deadLetterReader = openDeadLetterReaderAtEnd();
+		jdbc.sql("delete from dead_letter").update();
+		br0001 = TestBranch.open("BR0001", br0001Kafka);
+		br0002 = TestBranch.open("BR0002", br0002Kafka);
+		br0001.register(jdbc);
+		br0002.register(jdbc);
+		await().atMost(TIMEOUT).until(() -> listeners.connectedBranches().containsAll(List.of("BR0001", "BR0002")));
 	}
 
 	@AfterEach
 	void tearDown() {
-		deadLetterReader.close();
+		br0001.close();
+		br0002.close();
 	}
 
 	@Test
-	void storesValidExamplesAndSendsInvalidOnesToDeadLetterTopicWithReason() {
-		Map<String, RejectReason> invalid = Map.of(
-				"invalid-schema/amount-as-number.json", RejectReason.SCHEMA_INVALID,
-				"invalid-schema/empty-lines.json", RejectReason.SCHEMA_INVALID,
-				"invalid-schema/negative-amount.json", RejectReason.SCHEMA_INVALID,
-				"invalid-schema/revision-zero.json", RejectReason.SCHEMA_INVALID,
-				"invalid-business/total-mismatch.json", RejectReason.TOTAL_MISMATCH,
-				"invalid-business/duplicate-category.json", RejectReason.DUPLICATE_CATEGORY,
-				"invalid-business/unknown-branch.json", RejectReason.UNKNOWN_BRANCH,
-				"invalid-business/unknown-category.json", RejectReason.UNKNOWN_CATEGORY);
+	void storesValidExamplesAndRejectsInvalidOnesWithReceiptsToTheBranch() {
+		// unknown-branch.json (BR9999) is not here: a branch outside the registry is never read (see contract/README.md)
+		Map<String, RejectReason> invalid = new LinkedHashMap<>();
+		invalid.put("invalid-schema/amount-as-number.json", RejectReason.SCHEMA_INVALID);
+		invalid.put("invalid-schema/empty-lines.json", RejectReason.SCHEMA_INVALID);
+		invalid.put("invalid-schema/negative-amount.json", RejectReason.SCHEMA_INVALID);
+		invalid.put("invalid-schema/revision-zero.json", RejectReason.SCHEMA_INVALID);
+		invalid.put("invalid-business/total-mismatch.json", RejectReason.TOTAL_MISMATCH);
+		invalid.put("invalid-business/duplicate-category.json", RejectReason.DUPLICATE_CATEGORY);
+		invalid.put("invalid-business/unknown-category.json", RejectReason.UNKNOWN_CATEGORY);
 		byte[] notJson = "not json".getBytes(StandardCharsets.UTF_8);
 
-		// Valid and invalid records interleaved, so they share batches. Each on its branch's topic with key = branchCode.
-		send(ContractExamples.read("valid/basic.json"));
-		invalid.keySet().forEach(name -> send(ContractExamples.read(name)));
-		send(notJson);
-		send(ContractExamples.read("valid/unknown-field.json"));
+		// Valid and invalid records interleaved on BR0001, so they share batches
+		Map<Long, String> sent = new HashMap<>();
+		Map<String, Long> offsetOfExample = new HashMap<>();
+		sent.put(br0001.send(ContractExamples.read("valid/basic.json")), "INSERTED");
+		invalid.forEach((name, reason) -> {
+			long offset = br0001.send(ContractExamples.read(name));
+			sent.put(offset, reason.name());
+			offsetOfExample.put(name, offset);
+		});
+		sent.put(br0001.send("BR0001", notJson), RejectReason.INVALID_JSON.name());
+		long br0002Offset = br0002.send(ContractExamples.read("valid/unknown-field.json"));
 
-		List<ConsumerRecord<String, byte[]>> deadLetters = readDeadLetters(invalid.size() + 1);
-
-		Map<String, RejectReason> expected = new HashMap<>(invalid);
-		expected.put("not json", RejectReason.INVALID_JSON);
-		Map<String, RejectReason> actual = new HashMap<>();
-		for (ConsumerRecord<String, byte[]> record : deadLetters) {
-			actual.put(sourceOf(record.value(), invalid.keySet()), RejectReason.valueOf(header(record, "reject-reason")));
-			String branch = ContractExamples.branchCodeOf(record.value());
-			assertThat(record.key()).isEqualTo(branch);
-			assertThat(header(record, "kafka_dlt-original-topic")).isEqualTo(ContractExamples.topicOf(branch));
-			// Spring Kafka writes the original partition as a 4-byte int; every branch topic has one partition
-			assertThat(ByteBuffer.wrap(rawHeader(record, "kafka_dlt-original-partition")).getInt()).isZero();
+		// One receipt per record, matched by source offset
+		Map<Long, String> received = new HashMap<>();
+		for (JsonNode receipt : br0001.readReceipts(sent.size())) {
+			assertThat(receipt.get("branchCode").asString()).isEqualTo("BR0001");
+			String outcome = receipt.get("outcome").asString();
+			received.put(receipt.get("sourceOffset").asLong(),
+					outcome.equals("REJECTED") ? receipt.get("rejectReason").asString() : outcome);
 		}
-		assertThat(actual).isEqualTo(expected);
+		assertThat(received).isEqualTo(sent);
+		JsonNode br0002Receipt = br0002.readReceipts(1).getFirst();
+		assertThat(br0002Receipt.get("sourceOffset").asLong()).isEqualTo(br0002Offset);
+		assertThat(br0002Receipt.get("outcome").asString()).isEqualTo("INSERTED");
 
-		await().atMost(TIMEOUT).until(() -> storedRevision("BR0002").isPresent());
+		// Every rejected record is in dead_letter with its bytes unchanged
+		assertThat(jdbc.sql("select count(*) from dead_letter").query(Integer.class).single())
+				.isEqualTo(invalid.size() + 1);
+		invalid.keySet().forEach(name -> assertThat(deadLetterValue("BR0001", offsetOfExample.get(name)))
+				.isEqualTo(ContractExamples.read(name)));
+
 		assertThat(storedRevision("BR0001")).contains(1);
 		assertThat(lines("BR0001")).containsExactly(
 				"BEVERAGE 18200.00 410", "HOUSEHOLD 2500.00 37", "READY_MEAL 9120.50 152", "SNACK 12050.00 395");
@@ -124,119 +129,106 @@ class DailySummaryFlowTest {
 	}
 
 	@Test
-	void rejectsRecordsWhoseTopicOrKeyDoesNotMatchBranchCode() {
-		byte[] br0002 = ContractExamples.read("valid/unknown-field.json");
-		byte[] br0001 = ContractExamples.read("valid/basic.json");
+	void rejectsRecordsWhoseBranchCodeOrKeyDoesNotMatchTheBranch() {
+		byte[] br0002Value = ContractExamples.read("valid/unknown-field.json");
+		byte[] br0001Value = ContractExamples.read("valid/basic.json");
 
-		// Q5: BR0002's message on BR0001's topic (only User:BR0001 can write there, so BR0001 sent it)
-		kafka.send(ContractExamples.topicOf("BR0001"), "BR0002", br0002).join();
+		// Q5: BR0002's message in BR0001's Kafka (so BR0001's producer wrote it)
+		br0001.send("BR0002", br0002Value);
 		// Q7: key does not match branchCode, and no key at all
-		kafka.send(ContractExamples.topicOf("BR0001"), "BR0002", br0001).join();
-		kafka.send(ContractExamples.topicOf("BR0001"), null, br0001).join();
+		br0001.send("BR0002", br0001Value);
+		br0001.send(null, br0001Value);
 
-		List<ConsumerRecord<String, byte[]>> deadLetters = readDeadLetters(3);
-		assertThat(deadLetters).extracting(r -> header(r, "reject-reason"))
-				.containsExactlyInAnyOrder("BRANCH_MISMATCH", "KEY_MISMATCH", "KEY_MISMATCH");
-		assertThat(deadLetters).extracting(r -> header(r, "kafka_dlt-exception-message")).contains(
-				"BRANCH_MISMATCH: branchCode BR0002 sent on the topic of branch BR0001",
+		List<JsonNode> receipts = br0001.readReceipts(3);
+		assertThat(receipts).extracting(r -> r.get("rejectReason").asString())
+				.containsExactly("BRANCH_MISMATCH", "KEY_MISMATCH", "KEY_MISMATCH");
+		assertThat(receipts).extracting(r -> r.get("detail").asString()).containsExactly(
+				"BRANCH_MISMATCH: branchCode BR0002 read from the Kafka of branch BR0001",
 				"KEY_MISMATCH: record key 'BR0002', branchCode BR0001",
 				"KEY_MISMATCH: record key missing, branchCode BR0001");
+		// The summary could be read, so the receipt names the day and revision for the branch
+		assertThat(receipts.get(1).get("saleDate").asString()).isEqualTo("2026-10-01");
+		assertThat(receipts.get(1).get("revision").asInt()).isEqualTo(1);
 		assertThat(storedRevision("BR0001")).isEmpty();
 		assertThat(storedRevision("BR0002")).isEmpty();
 	}
 
 	@Test
-	void appliesOnlyHigherRevisions() {
-		send(ContractExamples.read("valid/basic.json"));
-		await().atMost(TIMEOUT).until(() -> storedRevision("BR0001").equals(Optional.of(1)));
+	void appliesOnlyHigherRevisionsAndTellsTheBranch() {
+		br0001.send(ContractExamples.read("valid/basic.json"));
+		br0001.send(ContractExamples.read("valid/revision-2.json"));
+		// R6 stale, then R5 duplicate
+		br0001.send(ContractExamples.read("valid/basic.json"));
+		br0001.send(ContractExamples.read("valid/revision-2.json"));
 
-		// R4: higher revision replaces header and lines
-		send(ContractExamples.read("valid/revision-2.json"));
-		await().atMost(TIMEOUT).until(() -> storedRevision("BR0001").equals(Optional.of(2)));
-		assertThat(lines("BR0001")).containsExactly(
-				"BEVERAGE 18700.00 422", "HOUSEHOLD 2500.00 37", "READY_MEAL 9120.50 152", "SNACK 12050.00 395");
-
-		// R6 stale, then R5 duplicate. A marker for another day on the same topic (one partition, so read after both)
-		// shows when the consumer has handled them.
-		send(ContractExamples.read("valid/basic.json"));
-		send(ContractExamples.read("valid/revision-2.json"));
-		send(basicForDate(SALE_DATE.plusDays(1)));
-		await().atMost(TIMEOUT).until(() -> storedRevision("BR0001", SALE_DATE.plusDays(1)).isPresent());
+		List<JsonNode> receipts = br0001.readReceipts(4);
+		assertThat(receipts).extracting(r -> r.get("outcome").asString() + " " + r.get("revision").asInt() + "->"
+				+ r.get("storedRevision").asInt())
+				.containsExactly("INSERTED 1->1", "UPDATED 2->2", "STALE 1->2", "DUPLICATE 2->2");
 
 		assertThat(storedRevision("BR0001")).contains(2);
 		assertThat(totalAmount("BR0001")).isEqualByComparingTo("42370.50");
 		assertThat(eventId("BR0001")).isEqualTo(UUID.fromString("9a7b6c5d-4e3f-4a2b-8c1d-0e9f8a7b6c5d"));
-		assertThat(lines("BR0001")).hasSize(4);
+		assertThat(lines("BR0001")).containsExactly(
+				"BEVERAGE 18700.00 422", "HOUSEHOLD 2500.00 37", "READY_MEAL 9120.50 152", "SNACK 12050.00 395");
 		// Skipped revisions are normal outcomes, not dead letters
-		assertThat(deadLetterReader.poll(Duration.ofSeconds(2))).isEmpty();
+		assertThat(jdbc.sql("select count(*) from dead_letter").query(Integer.class).single()).isZero();
 	}
 
-	/** Sends as the branch in the value would: on its topic, key = branchCode. */
-	private void send(byte[] value) {
-		String branch = ContractExamples.branchCodeOf(value);
-		kafka.send(ContractExamples.topicOf(branch), branch, value).join();
-	}
+	@Test
+	void replaysADeadLetterWhenHqAsksForIt() {
+		long offset = br0001.send(ContractExamples.read("invalid-business/unknown-category.json"));
+		assertThat(br0001.readReceipts(1).getFirst().get("rejectReason").asString()).isEqualTo("UNKNOWN_CATEGORY");
 
-	private static byte[] basicForDate(LocalDate date) {
-		String json = new String(ContractExamples.read("valid/basic.json"), StandardCharsets.UTF_8);
-		return json.replace("\"saleDate\": \"2026-10-01\"", "\"saleDate\": \"" + date + "\"")
-				.replace("3f1c2a9e-8b4d-4c1e-9f2a-6d7e8a9b0c1d", UUID.randomUUID().toString())
-				.getBytes(StandardCharsets.UTF_8);
-	}
+		// HQ adds the missing category, then asks for the record to be processed again
+		jdbc.sql("insert into category (category_code, description) values ('LOTTERY', 'Test only')").update();
+		try {
+			jdbc.sql("update dead_letter set replay_requested_at = now() where branch_code = 'BR0001' and source_offset = ?")
+					.param(offset)
+					.update();
 
-	private KafkaConsumer<String, byte[]> openDeadLetterReaderAtEnd() {
-		var reader = new KafkaConsumer<>(Map.<String, Object>of(
-				ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, kafkaContainer.getBootstrapServers(),
-				ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false),
-				new StringDeserializer(), new ByteArrayDeserializer());
-		List<TopicPartition> partitions = new ArrayList<>();
-		for (int p = 0; p < TestcontainersConfiguration.PARTITIONS; p++) {
-			partitions.add(new TopicPartition(deadLetterTopic, p));
+			JsonNode receipt = br0001.readReceipts(1).getFirst();
+			assertThat(receipt.get("sourceOffset").asLong()).isEqualTo(offset);
+			assertThat(receipt.get("outcome").asString()).isEqualTo("INSERTED");
+			assertThat(lines("BR0001")).containsExactly("LOTTERY 100.00 1");
+			await().atMost(TIMEOUT).until(() -> "INSERTED".equals(jdbc
+					.sql("select replay_result from dead_letter where branch_code = 'BR0001' and source_offset = ?")
+					.param(offset)
+					.query(String.class).single()));
+			// Done once: no further receipts for it
+			assertThat(br0001.pollReceipts(Duration.ofSeconds(2))).isEmpty();
 		}
-		reader.assign(partitions);
-		reader.seekToEnd(partitions);
-		partitions.forEach(reader::position); // resolve the end offsets now, before the test sends anything
-		return reader;
-	}
-
-	private List<ConsumerRecord<String, byte[]>> readDeadLetters(int count) {
-		// Polled on the test thread: KafkaConsumer is single-threaded and Awaitility evaluates conditions on its own thread
-		List<ConsumerRecord<String, byte[]>> records = new ArrayList<>();
-		long deadline = System.nanoTime() + TIMEOUT.toNanos();
-		while (records.size() < count && System.nanoTime() < deadline) {
-			deadLetterReader.poll(Duration.ofMillis(500)).forEach(records::add);
+		finally {
+			jdbc.sql("delete from branch_daily_sales").update();
+			jdbc.sql("delete from category where category_code = 'LOTTERY'").update();
 		}
-		assertThat(records).as("dead-letter records").hasSize(count);
-		return records;
 	}
 
-	/** Which example file (or the literal "not json") a dead-letter value came from; also proves the bytes are unchanged. */
-	private static String sourceOf(byte[] value, Iterable<String> examples) {
-		for (String name : examples) {
-			if (Arrays.equals(value, ContractExamples.read(name))) {
-				return name;
-			}
-		}
-		return new String(value, StandardCharsets.UTF_8);
+	@Test
+	void followsTheBranchRegistry() {
+		// Offboarded: HQ stops reading the branch; records wait in the branch's Kafka
+		jdbc.sql("update branch set kafka_bootstrap = null where branch_code = 'BR0002'").update();
+		await().atMost(TIMEOUT).until(() -> !listeners.connectedBranches().contains("BR0002"));
+		br0002.send(ContractExamples.read("valid/unknown-field.json"));
+		assertThat(br0002.pollReceipts(Duration.ofSeconds(3))).isEmpty();
+		assertThat(storedRevision("BR0002")).isEmpty();
+
+		// Onboarded again: the waiting record is read, without a consumer restart
+		br0002.register(jdbc);
+		assertThat(br0002.readReceipts(1).getFirst().get("outcome").asString()).isEqualTo("INSERTED");
+		assertThat(storedRevision("BR0002")).contains(1);
 	}
 
-	private static String header(ConsumerRecord<?, ?> record, String name) {
-		return new String(rawHeader(record, name), StandardCharsets.UTF_8);
-	}
-
-	private static byte[] rawHeader(ConsumerRecord<?, ?> record, String name) {
-		Header header = record.headers().lastHeader(name);
-		assertThat(header).as("header %s", name).isNotNull();
-		return header.value();
+	private byte[] deadLetterValue(String branchCode, long offset) {
+		return jdbc.sql("select record_value from dead_letter where branch_code = ? and source_offset = ?")
+				.params(branchCode, offset)
+				.query((rs, n) -> rs.getBytes(1))
+				.single();
 	}
 
 	private Optional<Integer> storedRevision(String branchCode) {
-		return storedRevision(branchCode, SALE_DATE);
-	}
-
-	private Optional<Integer> storedRevision(String branchCode, LocalDate saleDate) {
 		return jdbc.sql("select revision from branch_daily_sales where branch_code = ? and sale_date = ?")
-				.params(branchCode, saleDate)
+				.params(branchCode, SALE_DATE)
 				.query(Integer.class)
 				.optional();
 	}

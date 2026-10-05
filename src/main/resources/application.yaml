@@ -8,35 +8,44 @@ spring:
     username: ${HQ_DB_USER:hq_app}
     password: ${HQ_DB_PASSWORD}
 
+  # Shared client settings for every branch cluster. The address and credentials of each branch are added per branch
+  # (branch registry + branch-sales.branch-kafka below), so spring.kafka.bootstrap-servers is not used.
   kafka:
-    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     consumer:
-      group-id: hq-branch-sales-consumer
       auto-offset-reset: earliest
       enable-auto-commit: false
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       # Raw bytes: the listener parses JSON itself so a bad value becomes INVALID_JSON instead of a deserializer error,
-      # and the dead-letter record keeps the original bytes
+      # and dead_letter keeps the original bytes
       value-deserializer: org.apache.kafka.common.serialization.ByteArrayDeserializer
-      # Upper bound on records handled per poll; this controls load on the HQ DB
+      # Upper bound on records handled per poll and branch; this controls load on the HQ DB
       max-poll-records: ${CONSUMER_MAX_POLL_RECORDS:100}
-      properties:
-        # How soon the topic of a newly onboarded branch is picked up by the topic pattern (client default: 5 min)
-        metadata.max.age.ms: 60000
     producer:
-      # Used only to write the dead-letter topic
+      # Receipts to the branches
       acks: all
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.ByteArraySerializer
-    listener:
-      type: batch
-      ack-mode: batch
-      # Partitions are spread over the threads (one partition per branch topic)
-      concurrency: ${CONSUMER_CONCURRENCY:3}
+      properties:
+        # A receipt to an unreachable branch fails within ~30 s and is retried by the listener's error handler
+        delivery.timeout.ms: 30000
+        request.timeout.ms: 10000
+        max.block.ms: 10000
 
 branch-sales:
-  kafka:
-    # One topic per branch (branch-sales.daily-summary.<branchCode>, created by infra/onboard-branch.sh).
-    # The dead-letter topic ends in lower case, so it does not match.
-    topic-pattern: branch-sales\.daily-summary\.[A-Z0-9]{3,10}
-    dead-letter-topic: branch-sales.daily-summary.dlt
+  branch-kafka:
+    # Both topics exist in every branch cluster (contract/README.md)
+    summary-topic: branch-sales.daily-summary
+    receipt-topic: branch-sales.receipt
+    group-id: hq-branch-sales-consumer
+    security-protocol: ${BRANCH_KAFKA_SECURITY_PROTOCOL:SASL_SSL}
+    # SCRAM user created at every branch broker for HQ (branch kafka-init); one password per branch
+    username: hq
+    password-dir: ${BRANCH_KAFKA_PASSWORD_DIR:/run/secrets/branch-kafka}
+    # HQ CA (infra/tls/generate-certs.sh), which signs every branch broker certificate
+    truststore: ${BRANCH_KAFKA_TRUSTSTORE:/certs/ca.crt}
+    send-timeout: 40s
+    # How soon a branch onboarded or offboarded in the registry is connected or disconnected
+    registry-refresh-ms: ${BRANCH_REGISTRY_REFRESH_MS:60000}
+  dead-letter:
+    # How often rows with replay_requested_at are looked for
+    replay-interval-ms: ${DEAD_LETTER_REPLAY_INTERVAL_MS:30000}
