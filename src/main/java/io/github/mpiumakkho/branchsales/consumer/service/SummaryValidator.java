@@ -153,7 +153,7 @@ public class SummaryValidator {
 
 	/**
 	 * HQ reaches each branch's Kafka through the address registered for that branch, so the cluster identifies the
-	 * sender (requirements Q5, §16.3). The key must still be the branch code (Q7).
+	 * sender (requirements Q5, §11). The key must still be the branch code (Q7).
 	 */
 	private static void checkIdentity(DailySalesSummary summary, String branchCode, String key) {
 		if (!branchCode.equals(summary.branchCode())) {

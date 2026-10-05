@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# HQ is the certificate authority for every branch broker (requirements §16.5). Output goes to infra/tls/out/, which
+# HQ is the certificate authority for every branch broker (requirements §11). Output goes to infra/tls/out/, which
 # is git-ignored: never commit keys.
 #
 #   infra/tls/generate-certs.sh            # the HQ CA, once (skipped if it exists)

@@ -22,7 +22,7 @@ HQ connects out to each branch; neither side has an inbound port other than the 
 | BR0001 | `BEV`, `SNK`, `RTE`, `HH`, `GC` | `branch-sales-producer/demo-branches/BR0001/branch.yaml` (`GC` maps to `GIFT_CARD`, which HQ does not have yet) |
 | BR0002 | `C01`, `C02`, `C03`, `C05`, `C08`, `C99` | `branch-sales-producer/demo-branches/BR0002/branch.yaml` (`C01` and `C02` both map to `BEVERAGE`; `C99` is not mapped) |
 
-The demo branches start a send round every minute with up to 15 s random delay, and read confirmed days of the last 10 years (the demo days are fixed dates). The real defaults are every hour with up to 30 minutes, and 60 days (requirements Q4, §16.4).
+The demo branches start a send round every minute with up to 15 s random delay, and read confirmed days of the last 10 years (the demo days are fixed dates). The real defaults are every hour with up to 30 minutes, and 60 days (requirements Q4, §6).
 
 ## Requirements
 
