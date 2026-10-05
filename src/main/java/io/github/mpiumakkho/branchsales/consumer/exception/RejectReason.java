@@ -1,7 +1,7 @@
 package io.github.mpiumakkho.branchsales.consumer.exception;
 
 /**
- * Why a record was sent to the dead-letter topic. Values and order follow the
+ * Why a record was rejected and stored in the HQ {@code dead_letter} table. Values and order follow the
  * validation layers in {@code contract/README.md}.
  */
 public enum RejectReason {

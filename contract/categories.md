@@ -18,4 +18,4 @@ Branch back-office systems may use their own category codes. Each branch produce
 
 - Adding a code: add it to the HQ `category` table and this file first, then let branches map to it. The JSON Schema does not change, because `categoryCode` is validated by pattern, not by enum.
 - Removing or renaming a code is a breaking change for branches still sending it. Keep the old code accepted until no branch sends it.
-- A message with a code that is not in the HQ table goes to the dead-letter topic with reason `UNKNOWN_CATEGORY`.
+- A message with a code that is not in the HQ table is rejected with reason `UNKNOWN_CATEGORY`: stored in the HQ `dead_letter` table, with a `REJECTED` receipt to the branch.

@@ -30,7 +30,7 @@ The consumer checks a message in this order. The first failure rejects the recor
 | Layer | Rule | Reject reason |
 |---|---|---|
 | Parse | value is valid JSON | `INVALID_JSON` |
-| Schema | matches the JSON Schema, with `format` validation enabled (`uuid`, `date`, `date-time`) | `SCHEMA_INVALID` |
+| Schema | matches the JSON Schema, with `format` validation enabled (`uuid`, `date`, `date-time`); also rejects a value the schema accepts but HQ cannot store (`revision` beyond a 32-bit integer, `quantity` beyond a 64-bit integer) | `SCHEMA_INVALID` |
 | Identity | `branchCode` equals the branch whose cluster the record was read from | `BRANCH_MISMATCH` |
 | Identity | record key equals `branchCode` | `KEY_MISMATCH` |
 | Business | `totalAmount` equals the sum of `lines[].amount` | `TOTAL_MISMATCH` |
