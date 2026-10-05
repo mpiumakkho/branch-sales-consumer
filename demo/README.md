@@ -19,8 +19,8 @@ HQ connects out to each branch; neither side has an inbound port other than the 
 
 | Branch | Back-office category codes | Branch configuration |
 |---|---|---|
-| BR0001 | `BEV`, `SNK`, `RTE`, `HH`, `GC` | `branch-sales-producer/demo/BR0001/branch.yaml` (`GC` maps to `GIFT_CARD`, which HQ does not have yet) |
-| BR0002 | `C01`, `C02`, `C03`, `C05`, `C08`, `C99` | `branch-sales-producer/demo/BR0002/branch.yaml` (`C01` and `C02` both map to `BEVERAGE`; `C99` is not mapped) |
+| BR0001 | `BEV`, `SNK`, `RTE`, `HH`, `GC` | `branch-sales-producer/demo-branches/BR0001/branch.yaml` (`GC` maps to `GIFT_CARD`, which HQ does not have yet) |
+| BR0002 | `C01`, `C02`, `C03`, `C05`, `C08`, `C99` | `branch-sales-producer/demo-branches/BR0002/branch.yaml` (`C01` and `C02` both map to `BEVERAGE`; `C99` is not mapped) |
 
 The demo branches start a send round every minute with up to 15 s random delay, and read confirmed days of the last 10 years (the demo days are fixed dates). The real defaults are every hour with up to 30 minutes, and 60 days (requirements Q4, §16.4).
 
@@ -42,9 +42,9 @@ docker exec -i hq-db psql -U hq_app -d hq_sales < branch-sales-consumer/demo/hq-
 # HQ: rejected records
 docker exec hq-db psql -U hq_app -d hq_sales -c "select id, branch_code, source_offset, reject_reason, replay_result from dead_letter"
 # Branch: send state of every (day, revision), from its MongoDB; --history adds every attempt and receipt
-branch-sales-producer/demo/sync-state.sh BR0001
+branch-sales-producer/demo-branches/sync-state.sh BR0001
 # Branch: days in the back-office
-branch-sales-producer/demo/sql.sh BR0001 branch-sales-producer/demo/branch-status.sql
+branch-sales-producer/demo-branches/sql.sh BR0001 branch-sales-producer/demo-branches/branch-status.sql
 ```
 
 ## 1. Start HQ
@@ -83,8 +83,8 @@ Each branch's `kafka-init` creates the two topics, user `hq` and its ACLs, then 
 ### 3.1 Confirm a day at both branches
 
 ```bash
-branch-sales-producer/demo/sql.sh BR0001 branch-sales-producer/demo/BR0001/01-enter-and-confirm.sql
-branch-sales-producer/demo/sql.sh BR0002 branch-sales-producer/demo/BR0002/01-enter-and-confirm.sql
+branch-sales-producer/demo-branches/sql.sh BR0001 branch-sales-producer/demo-branches/BR0001/01-enter-and-confirm.sql
+branch-sales-producer/demo-branches/sql.sh BR0002 branch-sales-producer/demo-branches/BR0002/01-enter-and-confirm.sql
 ```
 
 Within about a minute, HQ has both days. BR0002's `C01` and `C02` arrive as one `BEVERAGE` line:
@@ -104,7 +104,7 @@ Each branch got HQ's receipt within a few seconds of sending (`sync-state.sh BR0
 ### 3.2 Edit after sending (revision 2)
 
 ```bash
-branch-sales-producer/demo/sql.sh BR0001 branch-sales-producer/demo/BR0001/02-edit-and-reconfirm.sql
+branch-sales-producer/demo-branches/sql.sh BR0001 branch-sales-producer/demo-branches/BR0001/02-edit-and-reconfirm.sql
 ```
 
 The manager edits 2026-10-01 (back to `DRAFT`) and confirms again. The producer sends revision 2 and HQ replaces the header and lines; the branch sees the receipt:
@@ -121,7 +121,7 @@ The manager edits 2026-10-01 (back to `DRAFT`) and confirms again. The producer 
 ### 3.3 A category code with no HQ mapping
 
 ```bash
-branch-sales-producer/demo/sql.sh BR0002 branch-sales-producer/demo/BR0002/02-unmapped-category.sql
+branch-sales-producer/demo-branches/sql.sh BR0002 branch-sales-producer/demo-branches/BR0002/02-unmapped-category.sql
 ```
 
 The day contains `C99`, which is not in BR0002's mapping. The producer does not send it, because HQ would only reject it. It is tried again every round, with the reason:
@@ -130,7 +130,7 @@ The day contains `C99`, which is not in BR0002's mapping. The producer does not 
 2026-10-02  r1  FAILED       attempts=1  offsets=  no HQ category mapping for local category [C99]
 ```
 
-Fix the mapping (add `C99: OTHER` to `branch-sales-producer/demo/BR0002/branch.yaml`) and restart the producer:
+Fix the mapping (add `C99: OTHER` to `branch-sales-producer/demo-branches/BR0002/branch.yaml`) and restart the producer:
 
 ```bash
 (cd branch-sales-producer && docker compose -f docker-compose.yml -f demo/BR0002.compose.yaml restart producer)
@@ -141,7 +141,7 @@ The next round sends it and HQ stores it (`HQ_ACCEPTED`, `OTHER 500.00 x5` at HQ
 ### 3.4 A message HQ rejects, and its replay
 
 ```bash
-branch-sales-producer/demo/sql.sh BR0001 branch-sales-producer/demo/BR0001/04-gift-card.sql
+branch-sales-producer/demo-branches/sql.sh BR0001 branch-sales-producer/demo-branches/BR0001/04-gift-card.sql
 ```
 
 The day has gift cards, mapped to `GIFT_CARD`, a category HQ does not have. The producer sends it (the mapping is fine as far as the branch knows) and HQ rejects it (`UNKNOWN_CATEGORY`). Unlike a message that was never acknowledged, the branch learns the reason from HQ's receipt:
@@ -181,7 +181,7 @@ Cut BR0002 off from the WAN by stopping its edge, then confirm a day:
 
 ```bash
 (cd branch-sales-producer && docker compose -f docker-compose.yml -f demo/BR0002.compose.yaml stop edge)
-branch-sales-producer/demo/sql.sh BR0002 branch-sales-producer/demo/BR0002/03-next-day.sql
+branch-sales-producer/demo-branches/sql.sh BR0002 branch-sales-producer/demo-branches/BR0002/03-next-day.sql
 ```
 
 The producer's next round still succeeds, because it writes to the broker in the branch: the day is `SENT`, with no receipt. HQ cannot reach the branch (`docker logs hq-consumer` repeats `UnknownHostException: kafka.br0002.example` for BR0002's client) and keeps reading the other branch:
@@ -205,7 +205,7 @@ HQ stops reading BR0001 (for example, HQ's password at that branch leaked), and 
 ```bash
 branch-sales-consumer/infra/offboard-branch.sh BR0001
 # docker logs hq-consumer: "Disconnected from branch BR0001 ..." within a minute, then:
-branch-sales-producer/demo/sql.sh BR0001 branch-sales-producer/demo/BR0001/03-next-day.sql
+branch-sales-producer/demo-branches/sql.sh BR0001 branch-sales-producer/demo-branches/BR0001/03-next-day.sql
 ```
 
 The branch sends as usual, into its own broker, and waits for a receipt (`2026-10-02  r1  SENT`). HQ onboards the branch again with a new password; the branch puts the new password into its `.env` and runs `kafka-init` again, which replaces user `hq`'s password:
