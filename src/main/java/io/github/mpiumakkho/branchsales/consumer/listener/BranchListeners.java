@@ -13,6 +13,7 @@ import org.apache.kafka.common.serialization.StringSerializer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.DisposableBean;
+import org.springframework.core.NestedExceptionUtils;
 import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
 import org.springframework.kafka.core.DefaultKafkaProducerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -73,8 +74,10 @@ public class BranchListeners implements DisposableBean {
 					connect(branchCode, bootstrap);
 				}
 				catch (RuntimeException e) {
-					// e.g. HQ's password for the branch is not installed yet; tried again at the next refresh
-					log.error("Cannot connect to branch {} at {}: {}", branchCode, bootstrap, e.getMessage());
+					// e.g. the branch host name does not resolve or HQ's password for it is not installed yet; tried again
+					// at the next refresh
+					log.error("Cannot connect to branch {} at {}: {}", branchCode, bootstrap,
+							NestedExceptionUtils.getMostSpecificCause(e).getMessage());
 				}
 			}
 		});
@@ -105,8 +108,15 @@ public class BranchListeners implements DisposableBean {
 		container.setBeanName("branch-" + branchCode);
 		container.setCommonErrorHandler(retryForever());
 
+		try {
+			// Fails if the branch host name does not resolve (yet); the next refresh tries again
+			container.start();
+		}
+		catch (RuntimeException e) {
+			producerFactory.destroy();
+			throw e;
+		}
 		connections.put(branchCode, new Connection(bootstrap, container, producerFactory, receipts));
-		container.start();
 		log.info("Connected to branch {} at {}", branchCode, bootstrap);
 	}
 

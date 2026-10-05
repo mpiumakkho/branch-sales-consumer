@@ -219,6 +219,23 @@ class DailySummaryFlowTest {
 		assertThat(storedRevision("BR0002")).contains(1);
 	}
 
+	@Test
+	void branchThatCannotBeConnectedYetIsTriedAgain() throws InterruptedException {
+		// The branch's host name does not resolve (e.g. its edge is not up yet): not connected, and not remembered as
+		// connected, so every refresh tries again (the demo showed a branch stuck after starting before its edge)
+		jdbc.sql("""
+				insert into branch (branch_code, name, kafka_bootstrap) values ('BR0003', 'Test branch 3', 'kafka.br0003.invalid:9094')
+				on conflict (branch_code) do update set kafka_bootstrap = excluded.kafka_bootstrap
+				""").update();
+		try {
+			Thread.sleep(1500); // a few refreshes
+			assertThat(listeners.connectedBranches()).doesNotContain("BR0003").contains("BR0001", "BR0002");
+		}
+		finally {
+			jdbc.sql("update branch set kafka_bootstrap = null where branch_code = 'BR0003'").update();
+		}
+	}
+
 	private byte[] deadLetterValue(String branchCode, long offset) {
 		return jdbc.sql("select record_value from dead_letter where branch_code = ? and source_offset = ?")
 				.params(branchCode, offset)
