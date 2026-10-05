@@ -1,5 +1,14 @@
 # Contract changelog
 
+## v1 — 2026-10-05 (Kafka at the branch, receipts)
+
+The summary schema does not change (`schemaVersion` stays 1). Where it travels and what comes back does:
+
+- Every branch runs its own Kafka broker. Summaries go to `branch-sales.daily-summary` in the branch's cluster, and HQ connects to each branch to read them. The per-branch topics and the HQ cluster are gone.
+- `BRANCH_MISMATCH` now compares `branchCode` with the branch whose cluster the record was read from.
+- New: `DailySalesReceipt` v1 ([schema](daily-sales-receipt.v1.schema.json)) on `branch-sales.receipt` in the branch's cluster, one per summary record.
+- Rejected records are stored in the HQ table `dead_letter` instead of the topic `branch-sales.daily-summary.dlt`, and can be replayed.
+
 ## v1 — 2026-10-02 (one topic per branch)
 
 The message schema does not change (`schemaVersion` stays 1). Where a branch sends it does:

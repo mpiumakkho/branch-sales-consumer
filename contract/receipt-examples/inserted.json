@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "branchCode": "BR0001",
+  "sourceOffset": 0,
+  "eventId": "3f1c2a9e-8b4d-4c1e-9f2a-6d7e8a9b0c1d",
+  "saleDate": "2026-10-01",
+  "revision": 1,
+  "outcome": "INSERTED",
+  "storedRevision": 1,
+  "processedAt": "2026-10-02T09:15:04.120+07:00"
+}

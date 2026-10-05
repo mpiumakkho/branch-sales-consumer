@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "branchCode": "BR0001",
+  "sourceOffset": 4,
+  "outcome": "REJECTED",
+  "rejectReason": "INVALID_JSON",
+  "detail": "INVALID_JSON: Unrecognized token 'not': was expecting (JSON String, Number, Array, Object or token 'null', 'true' or 'false')",
+  "processedAt": "2026-10-03T09:15:05.002+07:00"
+}
