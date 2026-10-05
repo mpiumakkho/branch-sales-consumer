@@ -1,0 +1,48 @@
+# Scale measurement of the HQ consumer: how much one connected branch costs inside the consumer JVM, and how fast
+# records flow through the HQ side. Not the demo and not production: brokers are small PLAINTEXT single nodes
+# (bench.sh generates brokers.compose.yml), many registry rows point at the same broker, no TLS, no edge.
+#
+# Run with bench.sh. Everything lives in project `branch-sales-bench`; `bench.sh down` removes it.
+
+name: branch-sales-bench
+
+services:
+  bench-db:
+    image: postgres:18.6-alpine
+    container_name: bench-db
+    environment:
+      POSTGRES_DB: hq_sales
+      POSTGRES_USER: hq_app
+      POSTGRES_PASSWORD: bench
+    networks: [bench]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hq_app -d hq_sales"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # The consumer from the build stage of the repo Dockerfile: same jar, but with a JDK so jcmd can read the heap.
+  bench-consumer:
+    build:
+      context: ..
+      target: build
+    image: branch-sales-consumer:bench
+    container_name: bench-consumer
+    depends_on:
+      bench-db:
+        condition: service_healthy
+    entrypoint: ["sh", "-c", "exec java $$JAVA_OPTS -jar /src/target/branch-sales-consumer-*.jar"]
+    environment:
+      JAVA_OPTS: ${BENCH_JAVA_OPTS:--Xmx2g}
+      HQ_DB_URL: jdbc:postgresql://bench-db:5432/hq_sales
+      HQ_DB_PASSWORD: bench
+      # No TLS or SCRAM in the bench: the brokers are PLAINTEXT
+      BRANCH_KAFKA_SECURITY_PROTOCOL: PLAINTEXT
+      # Pick up new registry rows quickly
+      BRANCH_REGISTRY_REFRESH_MS: ${BENCH_REFRESH_MS:-5000}
+      CONSUMER_MAX_POLL_RECORDS: ${CONSUMER_MAX_POLL_RECORDS:-100}
+    networks: [bench]
+
+networks:
+  bench:
+    name: branch-sales-bench

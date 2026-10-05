@@ -9,6 +9,7 @@ HQ side of Branch Daily Sales Sync. Every branch runs its own Kafka broker; the 
 | [`contract/`](contract/) | Message contract shared with the branch producer: summary and receipt JSON Schemas, examples, topics |
 | [`infra/`](infra/) | Docker Compose for the HQ database and the consumer, HQ CA, branch onboarding scripts |
 | [`demo/`](demo/) | End-to-end demo with two branches: [demo/README.md](demo/README.md) |
+| [`bench/`](bench/) | Scale measurement: cost of a connected branch in the consumer JVM and records per second, with results: [bench/README.md](bench/README.md) |
 | `src/` | The consumer (Java 25, Spring Boot 4) |
 
 ## How a record is handled
@@ -32,7 +33,7 @@ branch registry (table branch, kafka_bootstrap)  ──► one listener containe
 - Revisions (rules R4–R6): one `INSERT ... ON CONFLICT DO UPDATE ... WHERE stored.revision < incoming.revision`. A higher revision replaces the header and all lines; the same revision is `DUPLICATE`; a lower one is `STALE` (logged at WARN). Neither is a rejection.
 - Any other failure (HQ database or the branch broker unreachable) is retried with exponential back-off (1 s up to 60 s) and no attempt limit, per branch. Records before the failed one are committed; that branch waits at the failed record and nothing is skipped. Other branches are not affected: each has its own container and thread.
 - Branches are connected from the registry: a row with a `kafka_bootstrap` address is connected within a minute, a cleared address disconnects, a changed address reconnects. A branch that cannot be connected yet (host name not resolvable, password file missing) is tried again at every refresh. See [infra/README.md](infra/README.md#onboarding-a-branch).
-- Several consumer instances can share the branches: each instance is started with a shard name (`CONSUMER_SHARD`) and reads only the branches whose registry row has that shard (`infra/onboard-branch.sh`, `BRANCH_SHARD`). Moving a branch to another shard in the registry moves it between instances within a minute. Replays of rejected records are done by the instance that reads the branch.
+- Several consumer instances can share the branches: each instance is started with a shard name (`CONSUMER_SHARD`) and reads only the branches whose registry row has that shard (`infra/onboard-branch.sh`, `BRANCH_SHARD`). Moving a branch to another shard in the registry moves it between instances within a minute. Replays of rejected records are done by the instance that reads the branch. Measured cost per connected branch and sizing: [bench/README.md](bench/README.md) (about 1 MB RSS, 3 threads and 0.15% of a core idle per branch; 300–500 branches per instance is a reasonable shard).
 
 ## Replaying rejected records
 
