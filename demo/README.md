@@ -1,24 +1,28 @@
 # End-to-end demo
 
-Runs HQ (Kafka, HQ database, consumer) and two branches (branch database + producer each) on one machine with Docker, then walks through the normal flow and the failure cases.
+Runs HQ (HQ database, consumer) and two branches (back-office database, MongoDB, Kafka broker, edge and producer each) on one machine with Docker, then walks through the normal flow and the failure cases.
 
 ```
- branch-br0001 (network)          branch-sales-wan              branch-sales-hq
- ┌─────────────────────┐                                    ┌──────────────────────────┐
- │ branch-db  producer ├──┐   TLS + SCRAM user BR0001       │ consumer ──► hq-db       │
- └─────────────────────┘  ├──► kafka.hq.example:9094 ── hq-edge ─► kafka:9094 EXTERNAL │
- ┌─────────────────────┐  │    (port forward, TLS passes)   │ kafka:19092 INTERNAL ◄─┘ │
- │ branch-db  producer ├──┘   TLS + SCRAM user BR0002       └──────────────────────────┘
- └─────────────────────┘
+ branch-br0001 (network)                        branch-sales-wan                 branch-sales-hq
+ ┌───────────────────────────────────────┐                                  ┌────────────────────┐
+ │ branch-db ◄─ producer ─► kafka:19092  │                                  │                    │
+ │ mongodb  ◄──┘            kafka:9094 ◄─┼─ edge (kafka.br0001.example) ◄───┤ consumer ─► hq-db  │
+ └───────────────────────────────────────┘    TLS + SCRAM user hq           │    │               │
+ ┌───────────────────────────────────────┐                                  │    │               │
+ │ branch-db ◄─ producer ─► kafka:19092  │                                  │    │               │
+ │ mongodb  ◄──┘            kafka:9094 ◄─┼─ edge (kafka.br0002.example) ◄───┼────┘               │
+ └───────────────────────────────────────┘                                  └────────────────────┘
  branch-br0002 (network)
 ```
 
-| Branch | Kafka topic | Back-office category codes | Branch configuration |
-|---|---|---|---|
-| BR0001 | `branch-sales.daily-summary.BR0001` | `BEV`, `SNK`, `RTE`, `HH` | `branch-sales-producer/demo/BR0001/branch.yaml` |
-| BR0002 | `branch-sales.daily-summary.BR0002` | `C01`, `C02`, `C03`, `C05`, `C08`, `C99` | `branch-sales-producer/demo/BR0002/branch.yaml` (`C01` and `C02` both map to `BEVERAGE`; `C99` is not mapped) |
+HQ connects out to each branch; neither side has an inbound port other than the branch edge's 9094. Each branch's Kafka holds `branch-sales.daily-summary` (written by the producer, read by HQ) and `branch-sales.receipt` (written by HQ, read by the producer).
 
-The demo branches start a send round every minute with up to 15 s random delay. The real default is every hour with up to 30 minutes (requirements Q4).
+| Branch | Back-office category codes | Branch configuration |
+|---|---|---|
+| BR0001 | `BEV`, `SNK`, `RTE`, `HH`, `GC` | `branch-sales-producer/demo/BR0001/branch.yaml` (`GC` maps to `GIFT_CARD`, which HQ does not have yet) |
+| BR0002 | `C01`, `C02`, `C03`, `C05`, `C08`, `C99` | `branch-sales-producer/demo/BR0002/branch.yaml` (`C01` and `C02` both map to `BEVERAGE`; `C99` is not mapped) |
+
+The demo branches start a send round every minute with up to 15 s random delay, and read confirmed days of the last 10 years (the demo days are fixed dates). The real defaults are every hour with up to 30 minutes, and 60 days (requirements Q4, §16.4).
 
 ## Requirements
 
@@ -35,7 +39,11 @@ Status queries used throughout:
 ```bash
 # HQ: what HQ has stored
 docker exec -i hq-db psql -U hq_app -d hq_sales < branch-sales-consumer/demo/hq-status.sql
-# Branch: days in the back-office and their send status (sync_log)
+# HQ: rejected records
+docker exec hq-db psql -U hq_app -d hq_sales -c "select id, branch_code, source_offset, reject_reason, replay_result from dead_letter"
+# Branch: send state of every (day, revision), from its MongoDB; --history adds every attempt and receipt
+branch-sales-producer/demo/sync-state.sh BR0001
+# Branch: days in the back-office
 branch-sales-producer/demo/sql.sh BR0001 branch-sales-producer/demo/branch-status.sql
 ```
 
@@ -43,36 +51,32 @@ branch-sales-producer/demo/sql.sh BR0001 branch-sales-producer/demo/branch-statu
 
 ```bash
 cp branch-sales-consumer/infra/.env.example branch-sales-consumer/infra/.env   # set HQ_DB_PASSWORD
-branch-sales-consumer/infra/tls/generate-certs.sh                              # demo CA + broker certificate
+branch-sales-consumer/infra/tls/generate-certs.sh                              # HQ CA
 (cd branch-sales-consumer/infra && docker compose --profile consumer up -d --build && ./smoke-test.sh)
 ```
 
-The smoke test checks TLS + SCRAM on the external listener, that a client cannot write a topic its ACL does not allow, that a wrong password and a plaintext client are refused, and that the WAN can reach neither the HQ DB nor Kafka's internal listeners.
-
-Onboard the two demo branches: Kafka user, topic, ACL, quota and HQ branch registry ([infra/README.md](../infra/README.md#onboarding-a-branch)). Choose a password per branch (8–128 characters from `A-Z a-z 0-9 . _ ~ -`):
+Onboard the two demo branches: broker certificate, HQ's password at the branch, and the HQ branch registry ([infra/README.md](../infra/README.md#onboarding-a-branch)). Choose a password per branch (8–128 characters from `A-Z a-z 0-9 . _ ~ -`):
 
 ```bash
-BRANCH_KAFKA_PASSWORD=pw-br0001 branch-sales-consumer/infra/onboard-branch.sh BR0001 "Demo branch 1"
-BRANCH_KAFKA_PASSWORD=pw-br0002 branch-sales-consumer/infra/onboard-branch.sh BR0002 "Demo branch 2"
+HQ_KAFKA_PASSWORD=pw-hq-at-br0001 branch-sales-consumer/infra/onboard-branch.sh BR0001 "Demo branch 1"
+HQ_KAFKA_PASSWORD=pw-hq-at-br0002 branch-sales-consumer/infra/onboard-branch.sh BR0002 "Demo branch 2"
 ```
 
-Within a minute, `docker logs hq-consumer` shows the consumer picking up the new topics (`partitions assigned: [branch-sales.daily-summary.BR0001-0, ...]`).
+Until the branches are up, `docker logs hq-consumer` shows `Cannot connect to branch BR0001 at kafka.br0001.example:9094` once a minute: the host name does not exist yet.
 
 ## 2. Start the branches
 
 ```bash
 cp branch-sales-producer/.env.example branch-sales-producer/.env
-# in branch-sales-producer/.env: BRANCH_DB_PASSWORD, and BR0001_KAFKA_PASSWORD=pw-br0001, BR0002_KAFKA_PASSWORD=pw-br0002
+# in branch-sales-producer/.env: the four passwords, BR0001_HQ_KAFKA_PASSWORD=pw-hq-at-br0001, BR0002_HQ_KAFKA_PASSWORD=pw-hq-at-br0002
+# (the *_KAFKA_PEM paths in .env.example already point at the certificates onboard-branch.sh created)
 (cd branch-sales-producer && docker compose -f docker-compose.yml -f demo/BR0001.compose.yaml up -d --build)
 (cd branch-sales-producer && docker compose -f docker-compose.yml -f demo/BR0002.compose.yaml up -d)
+(cd branch-sales-producer && HQ_KAFKA_PASSWORD=pw-hq-at-br0001 ./smoke-test.sh BR0001 ../branch-sales-consumer/infra/tls/out/ca.crt)
+(cd branch-sales-producer && HQ_KAFKA_PASSWORD=pw-hq-at-br0002 ./smoke-test.sh BR0002 ../branch-sales-consumer/infra/tls/out/ca.crt)
 ```
 
-Each producer creates `sync_log` and `sync_attempt` in its branch database (Flyway baseline 0, then `V1`, `V2`) and logs in to Kafka as its branch. A branch can reach Kafka but not the HQ database:
-
-```bash
-docker exec branch-br0001-producer-1 getent hosts kafka.hq.example   # resolves
-docker exec branch-br0001-producer-1 getent hosts hq-db              # no output
-```
+Each branch's `kafka-init` creates the two topics, user `hq` and its ACLs, then exits. The smoke test connects from `wan` as HQ does (TLS with the HQ CA, host name checked, SCRAM) and checks that nothing but the edge's port 9094 is reachable. Within a minute, `docker logs hq-consumer` shows `Connected to branch BR0001 at kafka.br0001.example:9094` and the same for BR0002.
 
 ## 3. Scenarios
 
@@ -83,15 +87,19 @@ branch-sales-producer/demo/sql.sh BR0001 branch-sales-producer/demo/BR0001/01-en
 branch-sales-producer/demo/sql.sh BR0002 branch-sales-producer/demo/BR0002/01-enter-and-confirm.sql
 ```
 
-Within about a minute, HQ has both days. BR0002's `C01` and `C02` arrive as one `BEVERAGE` line. The two branches send at different seconds because of the random delay:
+Within about a minute, HQ has both days. BR0002's `C01` and `C02` arrive as one `BEVERAGE` line:
 
 ```
  branch_code | sale_date  | revision | total_amount | ... | received_at_bkk     | lines
- BR0001      | 2026-10-01 |        1 |     41870.50 | ... | 2026-10-02 16:21:12 | BEVERAGE 18200.00 x410, HOUSEHOLD 2500.00 x37, READY_MEAL 9120.50 x152, SNACK 12050.00 x395
- BR0002      | 2026-10-01 |        1 |      7730.00 | ... | 2026-10-02 16:21:07 | BEVERAGE 4650.00 x132, FRESH_FOOD 980.00 x30, SNACK 2100.00 x95
+ BR0001      | 2026-10-01 |        1 |     41870.50 | ... | 2026-10-05 14:09:11 | BEVERAGE 18200.00 x410, HOUSEHOLD 2500.00 x37, READY_MEAL 9120.50 x152, SNACK 12050.00 x395
+ BR0002      | 2026-10-01 |        1 |      7730.00 | ... | 2026-10-05 14:09:13 | BEVERAGE 4650.00 x132, FRESH_FOOD 980.00 x30, SNACK 2100.00 x95
 ```
 
-At the branches, `sync_log` shows `SENT`, `attempts 1`.
+Each branch got HQ's receipt within a few seconds of sending (`sync-state.sh BR0001`):
+
+```
+2026-10-01  r1  HQ_ACCEPTED  attempts=1  offsets=0  INSERTED stored revision 1
+```
 
 ### 3.2 Edit after sending (revision 2)
 
@@ -99,7 +107,12 @@ At the branches, `sync_log` shows `SENT`, `attempts 1`.
 branch-sales-producer/demo/sql.sh BR0001 branch-sales-producer/demo/BR0001/02-edit-and-reconfirm.sql
 ```
 
-The manager edits 2026-10-01 (back to `DRAFT`) and confirms again. The producer sends revision 2, and HQ replaces the header and lines (`docker logs hq-consumer`: `UPDATED BR0001/2026-10-01 revision 2`):
+The manager edits 2026-10-01 (back to `DRAFT`) and confirms again. The producer sends revision 2 and HQ replaces the header and lines; the branch sees the receipt:
+
+```
+2026-10-01  r1  HQ_ACCEPTED  attempts=1  offsets=0  INSERTED stored revision 1
+2026-10-01  r2  HQ_ACCEPTED  attempts=1  offsets=1  UPDATED stored revision 2
+```
 
 ```
  BR0001      | 2026-10-01 |        2 |     42370.50 | ... | BEVERAGE 18700.00 x422, HOUSEHOLD 2500.00 x37, READY_MEAL 9120.50 x152, SNACK 12050.00 x395
@@ -111,11 +124,10 @@ The manager edits 2026-10-01 (back to `DRAFT`) and confirms again. The producer 
 branch-sales-producer/demo/sql.sh BR0002 branch-sales-producer/demo/BR0002/02-unmapped-category.sql
 ```
 
-The day contains `C99`, which is not in BR0002's mapping. The producer does not send it, because HQ would only reject it. It stays pending:
+The day contains `C99`, which is not in BR0002's mapping. The producer does not send it, because HQ would only reject it. It is tried again every round, with the reason:
 
 ```
- sale_date  |  status   | revision | sync_status | attempts | last_error
- 2026-10-02 | CONFIRMED |        1 | FAILED      |        1 | no HQ category mapping for local category [C99]
+2026-10-02  r1  FAILED       attempts=1  offsets=  no HQ category mapping for local category [C99]
 ```
 
 Fix the mapping (add `C99: OTHER` to `branch-sales-producer/demo/BR0002/branch.yaml`) and restart the producer:
@@ -124,114 +136,100 @@ Fix the mapping (add `C99: OTHER` to `branch-sales-producer/demo/BR0002/branch.y
 (cd branch-sales-producer && docker compose -f docker-compose.yml -f demo/BR0002.compose.yaml restart producer)
 ```
 
-The next round sends it (`SENT`, `attempts 2`), and HQ shows `OTHER 500.00 x5`. Undo the mapping change afterwards if you want to run this scenario again.
+The next round sends it and HQ stores it (`HQ_ACCEPTED`, `OTHER 500.00 x5` at HQ). Undo the mapping change afterwards if you want to run this scenario again.
 
-### 3.4 Branch offline
-
-Cut the branch off from the WAN, confirm a day, and wait for a round:
+### 3.4 A message HQ rejects, and its replay
 
 ```bash
-docker network disconnect branch-sales-wan branch-br0001-producer-1
-branch-sales-producer/demo/sql.sh BR0001 branch-sales-producer/demo/BR0001/03-next-day.sql
+branch-sales-producer/demo/sql.sh BR0001 branch-sales-producer/demo/BR0001/04-gift-card.sql
 ```
 
-After about 30 s (the producer's send timeout), the day is `FAILED`, with the reason in `last_error`:
+The day has gift cards, mapped to `GIFT_CARD`, a category HQ does not have. The producer sends it (the mapping is fine as far as the branch knows) and HQ rejects it (`UNKNOWN_CATEGORY`). Unlike a message that was never acknowledged, the branch learns the reason from HQ's receipt:
 
 ```
-not acknowledged by Kafka: org.apache.kafka.common.errors.TimeoutException: Expiring 1 record(s) for branch-sales.daily-summary.BR0001-0:30001 ms has passed since batch creation
+2026-10-03  r1  HQ_REJECTED  attempts=1  offsets=2  UNKNOWN_CATEGORY: categoryCode [GIFT_CARD] is not in the category table
 ```
 
-If the producer was restarted while disconnected, the reason is `No resolvable bootstrap urls given in bootstrap.servers` instead: it cannot even resolve `kafka.hq.example`.
+HQ keeps the record unchanged:
 
-The data is still in the branch database. Reconnect:
+```
+ id | branch_code | source_offset |  reject_reason   | replay_result
+  1 | BR0001      |             2 | UNKNOWN_CATEGORY |
+```
+
+The branch does not send it again on its own. HQ fixes the cause (adds the category) and asks for the record to be processed again:
 
 ```bash
-docker network connect branch-sales-wan branch-br0001-producer-1
+docker exec hq-db psql -U hq_app -d hq_sales -c "insert into category (category_code, description) values ('GIFT_CARD', 'Gift cards sold')"
+docker exec hq-db psql -U hq_app -d hq_sales -c "update dead_letter set replay_requested_at = now() where id = 1"
 ```
 
-The next round sends the day (`SENT`, `attempts 2`), and HQ stores it. `sync_log` no longer shows the error; the attempt history does:
+Within 30 s the consumer replays it (`docker logs hq-consumer`: `Replayed dead letter 1 (BR0001 offset 2): INSERTED`), HQ has the day, the row shows `replay_result = INSERTED`, and the branch gets a second receipt for the same offset (`sync-state.sh BR0001 --history`):
+
+```
+2026-10-03  r1  HQ_ACCEPTED  attempts=1  offsets=2  INSERTED stored revision 1
+    2026-10-05 14:11:05  SENT          offset=2
+    2026-10-05 14:11:05  HQ_REJECTED   offset=2  UNKNOWN_CATEGORY: categoryCode [GIFT_CARD] is not in the category table
+    2026-10-05 14:12:45  HQ_INSERTED   offset=2
+```
+
+Messages that fail other contract checks (not JSON, schema, totals, wrong branch code) take the same path; the consumer tests send every example in `contract/examples/` through it.
+
+### 3.5 Branch offline
+
+Cut BR0002 off from the WAN by stopping its edge, then confirm a day:
 
 ```bash
-branch-sales-producer/demo/sql.sh BR0001 branch-sales-producer/demo/sync-attempts.sql
-```
-
-```
- sale_date  | revision |  attempted_at_bkk   | result |               event_id               | error
- 2026-10-01 |        1 | 2026-10-02 16:21:12 | SENT   | a3136bb9-0e64-4721-a95b-2befce84f45a |
- 2026-10-01 |        2 | 2026-10-02 16:22:07 | SENT   | ca4be5a6-3639-4b3a-b925-375c2405993b |
- 2026-10-02 |        1 | 2026-10-02 16:25:43 | FAILED | fe761992-c74a-4289-987f-7e85d8b669d5 | not acknowledged by Kafka: ... TimeoutException: Expiring 1 record(s) ...
- 2026-10-02 |        1 | 2026-10-02 16:26:03 | SENT   | 06010ae7-643e-4bb6-9e87-c7219cbffe17 |
-```
-
-The `event_id` of the `SENT` attempt is the one HQ stores in `branch_daily_sales.event_id` (here `06010ae7-...`).
-
-A message the producer recorded as failed may still have reached Kafka: a request sent while disconnected can be delivered once the connection comes back, and then HQ receives the day twice. In earlier runs of this demo that looked like this:
-
-```
-INSERTED BR0001/2026-10-02 revision 1 (...@2)
-DUPLICATE BR0001/2026-10-02 revision 1 (...@3)
-```
-
-This is the at-least-once delivery the design expects. HQ keeps one copy, because the revision is the same (rule R5).
-
-### 3.5 Messages HQ rejects (dead-letter topic)
-
-Real producers check their data before sending, so this sends contract example files directly, as a faulty branch would: logged in as BR0001, on BR0001's topic, with key `BR0001`.
-
-```bash
-export BRANCH_KAFKA_PASSWORD=pw-br0001
-(cd branch-sales-consumer && demo/send-raw.sh BR0001 contract/examples/invalid-business/total-mismatch.json)
-# BR0002's data sent by BR0001: the topic says the sender is BR0001
-(cd branch-sales-consumer && demo/send-raw.sh BR0001 contract/examples/valid/unknown-field.json)
-(cd branch-sales-consumer && demo/read-dlt.sh)
-```
-
-```
-  detail: TOTAL_MISMATCH: totalAmount 48250.00 but lines sum to 30250.00
-key=BR0001 reason=TOTAL_MISMATCH
-  detail: BRANCH_MISMATCH: branchCode BR0002 sent on the topic of branch BR0001
-key=BR0001 reason=BRANCH_MISMATCH
-```
-
-The stored HQ data does not change, and the consumer continues with the next records. BR0001 cannot write BR0002's topic at all: the broker refuses it (`TopicAuthorizationException`, smoke test step 4). Kafka UI shows all dead-letter headers: `(cd branch-sales-consumer/infra && docker compose --profile tools up -d kafka-ui)`, then open <http://localhost:8088>.
-
-### 3.6 Revoke a branch
-
-HQ revokes BR0002 (for example, its password leaked), and BR0002 confirms a day:
-
-```bash
-branch-sales-consumer/infra/offboard-branch.sh BR0002
+(cd branch-sales-producer && docker compose -f docker-compose.yml -f demo/BR0002.compose.yaml stop edge)
 branch-sales-producer/demo/sql.sh BR0002 branch-sales-producer/demo/BR0002/03-next-day.sql
 ```
 
-The producer is still connected, but its next send is refused (the ACL is gone; the old session would also end at its next re-login, within 10 minutes). The day stays pending:
+The producer's next round still succeeds, because it writes to the broker in the branch: the day is `SENT`, with no receipt. HQ cannot reach the branch (`docker logs hq-consumer` repeats `UnknownHostException: kafka.br0002.example` for BR0002's client) and keeps reading the other branch:
 
 ```
- sale_date  |  status   | revision | sync_status | attempts | last_error
- 2026-10-03 | CONFIRMED |        1 | FAILED      |        1 | not acknowledged by Kafka: org.apache.kafka.common.errors.TopicAuthorizationException: Not authorized to access topics: [branch-sales.daily-summary.BR0002]
+2026-10-03  r1  SENT         attempts=1  offsets=1
 ```
 
-HQ onboards the branch again with a new password, and the branch updates its configuration and restarts the producer:
+Reconnect:
 
 ```bash
-BRANCH_KAFKA_PASSWORD=pw-br0002-new branch-sales-consumer/infra/onboard-branch.sh BR0002 "Demo branch 2"
-# in branch-sales-producer/.env: BR0002_KAFKA_PASSWORD=pw-br0002-new
-(cd branch-sales-producer && docker compose -f docker-compose.yml -f demo/BR0002.compose.yaml up -d producer)
+(cd branch-sales-producer && docker compose -f docker-compose.yml -f demo/BR0002.compose.yaml start edge)
 ```
 
-The next round sends the day, and HQ stores it (`INSERTED BR0002/2026-10-03 revision 1`).
+HQ's client for BR0002 finds the broker again, reads the waiting record and answers; the branch shows `HQ_ACCEPTED`. Nothing was sent twice: the record waited in the branch's Kafka. If the branch's broker had lost it (a `SENT` day without a receipt after `SEND_RESEND_AFTER`, 24 hours by default), the producer would send it again, and HQ would answer `DUPLICATE` if it had stored it after all.
+
+### 3.6 Offboard and onboard a branch
+
+HQ stops reading BR0001 (for example, HQ's password at that branch leaked), and BR0001 confirms a day meanwhile:
+
+```bash
+branch-sales-consumer/infra/offboard-branch.sh BR0001
+# docker logs hq-consumer: "Disconnected from branch BR0001 ..." within a minute, then:
+branch-sales-producer/demo/sql.sh BR0001 branch-sales-producer/demo/BR0001/03-next-day.sql
+```
+
+The branch sends as usual, into its own broker, and waits for a receipt (`2026-10-02  r1  SENT`). HQ onboards the branch again with a new password; the branch puts the new password into its `.env` and runs `kafka-init` again, which replaces user `hq`'s password:
+
+```bash
+HQ_KAFKA_PASSWORD=pw-hq-at-br0001-new branch-sales-consumer/infra/onboard-branch.sh BR0001 "Demo branch 1"
+# in branch-sales-producer/.env: BR0001_HQ_KAFKA_PASSWORD=pw-hq-at-br0001-new
+(cd branch-sales-producer && docker compose -f docker-compose.yml -f demo/BR0001.compose.yaml up -d kafka-init)
+```
+
+Within a minute the consumer connects again, reads the waiting day and HQ stores it; the branch shows `HQ_ACCEPTED`. The branch's broker kept its certificate, which is still valid; onboarding also wrote a renewed one, which the branch would mount at its next broker restart.
 
 ## 4. Stop and reset
 
 ```bash
 (cd branch-sales-producer && docker compose -f docker-compose.yml -f demo/BR0001.compose.yaml down -v)
 (cd branch-sales-producer && docker compose -f docker-compose.yml -f demo/BR0002.compose.yaml down -v)
-(cd branch-sales-consumer/infra && docker compose --profile consumer --profile tools down -v)
+(cd branch-sales-consumer/infra && docker compose --profile consumer down -v)
 ```
 
-`-v` deletes the branch databases, the HQ database and the Kafka data, including the Kafka users. Leave it out to keep the data. Delete `branch-sales-consumer/infra/tls/out/` to create new certificates next time.
+`-v` deletes the branch databases, MongoDB, the branches' Kafka data (including user `hq`) and the HQ database. Leave it out to keep the data. Delete `branch-sales-consumer/infra/tls/out/` and `branch-sales-consumer/infra/secrets/` to start over with a new CA; every branch then needs onboarding again.
 
 ## Known limits
 
-- A record in the dead-letter topic is not replayed automatically. The producer has already recorded it as `SENT`, because the broker accepted it. After the cause is fixed (for example, a branch that was not registered), the branch has to send that revision again, for example by deleting its `SENT` row in `sync_log` (requirements Q8).
-- The network is simulated with Docker networks. The HQ-internal listeners are plaintext; see [infra/README.md](../infra/README.md#limits-of-this-setup).
+- The network is simulated with Docker networks; `kafka.<branch>.example` is a network alias of the branch's edge. A real deployment needs a resolvable host name per branch and a firewall rule at the branch that allows port 9094 from HQ's address only.
+- The branch broker key is created at HQ and handed over; see [infra/README.md](../infra/README.md#limits-of-this-setup).
+- A branch runs one Kafka node. If its data is lost, the producer sends what HQ has not acknowledged again after `SEND_RESEND_AFTER`; HQ keeps one copy per revision.
