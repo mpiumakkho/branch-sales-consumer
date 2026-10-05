@@ -18,6 +18,9 @@ name=${2:?usage: HQ_KAFKA_PASSWORD=... $0 <branchCode> <name>}
 password=${HQ_KAFKA_PASSWORD:?set HQ_KAFKA_PASSWORD (the branch puts the same value in its .env)}
 # Branch broker port as seen from HQ (the branch's edge)
 port=${BRANCH_KAFKA_PORT:-9094}
+# Which consumer instance reads the branch (CONSUMER_SHARD of that instance)
+shard=${BRANCH_SHARD:-default}
+[[ $shard =~ ^[a-z0-9-]{1,30}$ ]] || { echo "BRANCH_SHARD: 1-30 characters from a-z 0-9 -"; exit 1; }
 
 [[ $code =~ ^[A-Z0-9]{3,10}$ ]] || { echo "branch code must match ^[A-Z0-9]{3,10}\$ (contract)"; exit 1; }
 # Characters that need no quoting in the Kafka config syntax, the JAAS line of the consumer, or a .env file
@@ -33,11 +36,12 @@ mkdir -p secrets/branch-kafka
 # Readable by the consumer container (non-root uid). Demo only: production would use a secret store.
 (umask 022 && printf '%s' "$password" > "secrets/branch-kafka/$code")
 
-echo "3. HQ branch registry: $code at $bootstrap"
+echo "3. HQ branch registry: $code at $bootstrap, shard $shard"
 docker exec -i hq-db psql -U hq_app -d hq_sales -q -v ON_ERROR_STOP=1 -v code="$code" -v name="$name" \
-  -v bootstrap="$bootstrap" <<'SQL'
-insert into branch (branch_code, name, kafka_bootstrap) values (:'code', :'name', :'bootstrap')
-on conflict (branch_code) do update set name = excluded.name, kafka_bootstrap = excluded.kafka_bootstrap;
+  -v bootstrap="$bootstrap" -v shard="$shard" <<'SQL'
+insert into branch (branch_code, name, kafka_bootstrap, shard) values (:'code', :'name', :'bootstrap', :'shard')
+on conflict (branch_code) do update
+   set name = excluded.name, kafka_bootstrap = excluded.kafka_bootstrap, shard = excluded.shard;
 SQL
 
 echo "branch $code onboarded; hand over tls/out/branches/$code/kafka.pem and the password"

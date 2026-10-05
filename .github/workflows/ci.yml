@@ -49,7 +49,8 @@ jobs:
           # The registry table comes from the consumer's migration V4; create the minimum here, as the consumer would
           docker exec -i hq-db psql -U hq_app -d hq_sales -v ON_ERROR_STOP=1 <<'SQL'
           create table if not exists branch (branch_code varchar(10) primary key, name varchar(200) not null,
-            created_at timestamptz not null default now(), kafka_bootstrap varchar(255));
+            created_at timestamptz not null default now(), kafka_bootstrap varchar(255),
+            shard varchar(30) not null default 'default');
           SQL
           HQ_KAFKA_PASSWORD=ci-pass-$GITHUB_RUN_ID ./onboard-branch.sh BR0001 "CI branch"
           test -f tls/out/branches/BR0001/kafka.pem

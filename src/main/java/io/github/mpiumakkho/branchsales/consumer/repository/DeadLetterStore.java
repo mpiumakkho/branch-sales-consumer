@@ -1,6 +1,7 @@
 package io.github.mpiumakkho.branchsales.consumer.repository;
 
 import java.time.OffsetDateTime;
+import java.util.Collection;
 import java.util.List;
 
 import org.jspecify.annotations.Nullable;
@@ -45,16 +46,24 @@ public class DeadLetterStore {
 				.update();
 	}
 
-	/** Rows whose replay was requested after their last replay, oldest first. */
-	public List<DeadLetter> findReplayRequested(int limit) {
+	/**
+	 * Rows of the given branches whose replay was requested after their last replay, oldest first. Each consumer
+	 * instance passes the branches it is connected to, so a row is replayed by the instance that can send the receipt.
+	 */
+	public List<DeadLetter> findReplayRequested(int limit, Collection<String> branches) {
+		if (branches.isEmpty()) {
+			return List.of();
+		}
 		return jdbc.sql("""
 				select id, branch_code, source_offset, record_key, record_value, replay_requested_at
 				  from dead_letter
 				 where replay_requested_at is not null
 				   and (replayed_at is null or replayed_at < replay_requested_at)
+				   and branch_code in (:branches)
 				 order by id
 				 limit :limit
 				""")
+				.param("branches", branches)
 				.param("limit", limit)
 				.query((rs, n) -> new DeadLetter(rs.getLong("id"), rs.getString("branch_code"),
 						rs.getLong("source_offset"), rs.getString("record_key"), rs.getBytes("record_value"),

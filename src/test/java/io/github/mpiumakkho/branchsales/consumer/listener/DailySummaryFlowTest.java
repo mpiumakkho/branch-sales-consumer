@@ -220,6 +220,31 @@ class DailySummaryFlowTest {
 	}
 
 	@Test
+	void readsOnlyBranchesOfItsOwnShard() {
+		// Moved to another consumer instance's shard: this instance disconnects; the record waits for that instance
+		jdbc.sql("update branch set shard = 'other' where branch_code = 'BR0002'").update();
+		try {
+			await().atMost(TIMEOUT).until(() -> !listeners.connectedBranches().contains("BR0002"));
+			long offset = br0002.send(ContractExamples.read("valid/unknown-field.json"));
+			assertThat(br0002.pollReceipts(Duration.ofSeconds(3))).isEmpty();
+			// A replay request for that branch is left to the other instance as well
+			jdbc.sql("""
+					insert into dead_letter (branch_code, source_offset, record_key, record_value, reject_reason, detail,
+					  replay_requested_at)
+					values ('BR0002', ?, 'BR0002', ?, 'UNKNOWN_CATEGORY', 'test', now())
+					""").params(offset + 1000, ContractExamples.read("valid/unknown-field.json")).update();
+			assertThat(br0002.pollReceipts(Duration.ofSeconds(2))).isEmpty();
+		}
+		finally {
+			jdbc.sql("update branch set shard = 'default' where branch_code = 'BR0002'").update();
+		}
+		// Back in this shard: connected again, the waiting record and the replay are handled
+		await().atMost(TIMEOUT).until(() -> listeners.connectedBranches().contains("BR0002"));
+		assertThat(br0002.readReceipts(2)).extracting(r -> r.get("outcome").asString())
+				.containsExactlyInAnyOrder("INSERTED", "DUPLICATE");
+	}
+
+	@Test
 	void branchThatCannotBeConnectedYetIsTriedAgain() throws InterruptedException {
 		// The branch's host name does not resolve (e.g. its edge is not up yet): not connected, and not remembered as
 		// connected, so every refresh tries again (the demo showed a branch stuck after starting before its edge)

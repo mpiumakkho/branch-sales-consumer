@@ -21,8 +21,9 @@ import io.github.mpiumakkho.branchsales.consumer.service.DailySummaryProcessor;
  * where ...}), for example after adding a missing category. Requirements Q8.
  * <p>
  * The record goes through all contract checks again and the branch gets a new receipt for the same source offset.
- * A row is marked as replayed only after the branch acknowledged the receipt; if the branch is not connected or the
- * receipt fails, the row is tried again at the next run. Processing it again is safe: a stored record then gives
+ * A row is marked as replayed only after the branch acknowledged the receipt; if the receipt fails, the row is tried
+ * again at the next run. Only rows of branches this instance is connected to are taken, so with several consumer
+ * instances the one that reads the branch does the replay. Processing it again is safe: a stored record then gives
  * DUPLICATE.
  */
 @Component
@@ -47,7 +48,7 @@ public class DeadLetterReplayer {
 
 	@Scheduled(fixedDelayString = "${branch-sales.dead-letter.replay-interval-ms}")
 	public void replayRequested() {
-		for (DeadLetter deadLetter : deadLetters.findReplayRequested(BATCH_SIZE)) {
+		for (DeadLetter deadLetter : deadLetters.findReplayRequested(BATCH_SIZE, branches.connectedBranches())) {
 			var branchKafka = branches.receipts(deadLetter.branchCode());
 			if (branchKafka.isEmpty()) {
 				log.warn("Replay of dead letter {} waits: branch {} is not connected", deadLetter.id(),

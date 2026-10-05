@@ -30,9 +30,9 @@ import io.github.mpiumakkho.branchsales.consumer.kafka.BranchKafkaClients;
 import io.github.mpiumakkho.branchsales.consumer.repository.BranchRegistry;
 
 /**
- * One listener container (and one receipt producer) per branch in the branch registry. The registry is read again on
- * a fixed delay: a newly onboarded branch is connected, an offboarded one is disconnected, and a changed address is
- * reconnected, without a restart.
+ * One listener container (and one receipt producer) per branch of this instance's shard in the branch registry. The
+ * registry is read again on a fixed delay: a newly onboarded branch is connected, an offboarded one (or one moved to
+ * another shard) is disconnected, and a changed address is reconnected, without a restart.
  * <p>
  * Each branch has its own container and thread, so a branch that is offline or slow does not hold up the others.
  */
@@ -61,7 +61,7 @@ public class BranchListeners implements DisposableBean {
 
 	@Scheduled(initialDelay = 0, fixedDelayString = "${branch-sales.branch-kafka.registry-refresh-ms}")
 	public synchronized void refresh() {
-		Map<String, String> registered = registry.kafkaAddresses();
+		Map<String, String> registered = registry.kafkaAddresses(properties.shard());
 		for (String branchCode : Set.copyOf(connections.keySet())) {
 			String bootstrap = registered.get(branchCode);
 			if (bootstrap == null || !bootstrap.equals(connections.get(branchCode).bootstrap())) {

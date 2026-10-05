@@ -44,6 +44,8 @@ branch-sales:
     # HQ CA (infra/tls/generate-certs.sh), which signs every branch broker certificate
     truststore: ${BRANCH_KAFKA_TRUSTSTORE:/certs/ca.crt}
     send-timeout: 40s
+    # Branches whose registry row has this shard are read by this instance (infra/onboard-branch.sh, BRANCH_SHARD)
+    shard: ${CONSUMER_SHARD:default}
     # How soon a branch onboarded or offboarded in the registry is connected or disconnected
     registry-refresh-ms: ${BRANCH_REGISTRY_REFRESH_MS:60000}
   dead-letter:

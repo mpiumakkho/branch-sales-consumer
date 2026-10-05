@@ -50,6 +50,8 @@ services:
       BRANCH_KAFKA_SECURITY_PROTOCOL: SASL_SSL
       BRANCH_KAFKA_TRUSTSTORE: /certs/ca.crt
       BRANCH_KAFKA_PASSWORD_DIR: /run/secrets/branch-kafka
+      # Branches this instance reads (registry column shard). One instance with every branch in "default" here.
+      CONSUMER_SHARD: ${CONSUMER_SHARD:-default}
     volumes:
       # HQ CA certificate (tls/generate-certs.sh). Only the certificate: the CA key stays on the host.
       - ./tls/out/ca.crt:/certs/ca.crt:ro
