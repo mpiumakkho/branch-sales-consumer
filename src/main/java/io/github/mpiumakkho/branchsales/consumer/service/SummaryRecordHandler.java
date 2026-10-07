@@ -7,9 +7,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
-import io.micrometer.core.instrument.Counter;
-import io.micrometer.core.instrument.MeterRegistry;
-
 import io.github.mpiumakkho.branchsales.consumer.dto.Receipt;
 import io.github.mpiumakkho.branchsales.consumer.exception.RejectedMessageException;
 import io.github.mpiumakkho.branchsales.consumer.repository.DailySalesStore.Outcome;
@@ -27,12 +24,10 @@ public class SummaryRecordHandler {
 
 	private final DailySummaryProcessor processor;
 	private final DeadLetterStore deadLetters;
-	private final MeterRegistry meters;
 
-	public SummaryRecordHandler(DailySummaryProcessor processor, DeadLetterStore deadLetters, MeterRegistry meters) {
+	public SummaryRecordHandler(DailySummaryProcessor processor, DeadLetterStore deadLetters) {
 		this.processor = processor;
 		this.deadLetters = deadLetters;
-		this.meters = meters;
 	}
 
 	/**
@@ -53,24 +48,12 @@ public class SummaryRecordHandler {
 				log.info("{} {}/{} revision {} (offset {})", result.outcome(), summary.branchCode(),
 						summary.saleDate(), summary.revision(), sourceOffset);
 			}
-			count(result.outcome().name(), "none");
 			return Receipt.stored(branchCode, sourceOffset, summary, result, OffsetDateTime.now());
 		}
 		catch (RejectedMessageException e) {
 			log.warn("Rejected {} offset {}: {} key={}", branchCode, sourceOffset, e.getMessage(), key);
 			deadLetters.save(branchCode, sourceOffset, key, value, e);
-			count(Receipt.REJECTED, e.reason().name());
 			return Receipt.rejected(branchCode, sourceOffset, e, OffsetDateTime.now());
 		}
-	}
-
-	/** Records handled, by receipt outcome and (for REJECTED) reject reason. Not per branch: dead_letter has that. */
-	private void count(String outcome, String reason) {
-		Counter.builder("branch_sales.records")
-				.description("Summary records handled, by receipt outcome and reject reason")
-				.tag("outcome", outcome)
-				.tag("reason", reason)
-				.register(meters)
-				.increment();
 	}
 }

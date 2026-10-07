@@ -70,15 +70,25 @@ public class BranchListeners implements DisposableBean {
 	@Scheduled(initialDelay = 0, fixedDelayString = "${branch-sales.branch-kafka.registry-refresh-ms}")
 	public synchronized void refresh() {
 		Map<String, String> addresses = registry.kafkaAddresses(properties.shard());
+		Set<String> stopped = new TreeSet<>();
 		for (String branchCode : Set.copyOf(connections.keySet())) {
 			String bootstrap = addresses.get(branchCode);
-			if (bootstrap == null || !bootstrap.equals(connections.get(branchCode).bootstrap())) {
+			Connection connection = connections.get(branchCode);
+			if (bootstrap == null || !bootstrap.equals(connection.bootstrap())) {
 				disconnect(branchCode);
+			}
+			else if (!connection.container().isRunning()) {
+				// The listener stopped itself: the broker refused HQ's credentials (SASL) or the ACL is missing, which
+				// spring-kafka treats as fatal. Reported as unreachable and connected again at the next refresh.
+				disconnect(branchCode);
+				stopped.add(branchCode);
+				unreachable.put(branchCode, bootstrap + ": listener stopped (authentication or authorization refused)");
+				log.error("Listener of branch {} at {} stopped; reconnecting at the next refresh", branchCode, bootstrap);
 			}
 		}
 		unreachable.keySet().retainAll(addresses.keySet());
 		addresses.forEach((branchCode, bootstrap) -> {
-			if (!connections.containsKey(branchCode)) {
+			if (!connections.containsKey(branchCode) && !stopped.contains(branchCode)) {
 				try {
 					connect(branchCode, bootstrap);
 					unreachable.remove(branchCode);
@@ -111,9 +121,15 @@ public class BranchListeners implements DisposableBean {
 		return Optional.ofNullable(lastRefresh.get());
 	}
 
-	/** Branches with a running listener. */
+	/** Branches with a running listener. A listener that stopped itself is not counted (see {@link #refresh}). */
 	public Set<String> connectedBranches() {
-		return new TreeSet<>(connections.keySet());
+		Set<String> running = new TreeSet<>();
+		connections.forEach((branchCode, connection) -> {
+			if (connection.container().isRunning()) {
+				running.add(branchCode);
+			}
+		});
+		return running;
 	}
 
 	/** The receipt producer of a connected branch. */

@@ -52,6 +52,8 @@ services:
       BRANCH_KAFKA_PASSWORD_DIR: /run/secrets/branch-kafka
       # Branches this instance reads (registry column shard). One instance with every branch in "default" here.
       CONSUMER_SHARD: ${CONSUMER_SHARD:-default}
+      # Health and metrics listen on the hq-network address only, so nothing on wan can reach them (smoke-test.sh 4)
+      CONSUMER_HTTP_ADDRESS: ${HQ_CONSUMER_IP:-10.231.0.10}
     ports:
       # Health and metrics (/actuator/health, /actuator/prometheus), this machine only; no authentication
       - "127.0.0.1:${CONSUMER_HTTP_PORT:-8081}:8081"
@@ -61,8 +63,9 @@ services:
       # HQ's password at each branch, one file per branch code (onboard-branch.sh)
       - ./secrets/branch-kafka:/run/secrets/branch-kafka:ro
     networks:
-      - hq
-      - wan
+      hq:
+        ipv4_address: ${HQ_CONSUMER_IP:-10.231.0.10}
+      wan:
 
 volumes:
   hq-db-data:
@@ -70,5 +73,10 @@ volumes:
 networks:
   hq:
     name: branch-sales-hq
+    # Fixed subnet so the consumer can bind its HTTP port to its hq address (HQ_SUBNET / HQ_CONSUMER_IP in .env
+    # if this range is taken on the machine)
+    ipam:
+      config:
+        - subnet: ${HQ_SUBNET:-10.231.0.0/24}
   wan:
     name: branch-sales-wan

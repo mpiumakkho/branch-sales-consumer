@@ -13,21 +13,38 @@ import tools.jackson.databind.node.ObjectNode;
 
 import io.github.mpiumakkho.branchsales.consumer.config.BranchKafkaProperties;
 import io.github.mpiumakkho.branchsales.consumer.dto.Receipt;
+import io.github.mpiumakkho.branchsales.consumer.exception.RejectReason;
+import io.github.mpiumakkho.branchsales.consumer.repository.DailySalesStore.Outcome;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 
 /**
  * Writes receipts to a branch's receipt topic, in that branch's Kafka cluster. Waits for the broker ack, so the
  * caller commits the summary offset only after the branch can read the receipt.
+ * <p>
+ * Counts the receipts acknowledged ({@code branch_sales.receipts}, by outcome and reject reason): every record HQ
+ * has finished with, from a batch or a replay, exactly once per receipt the branch can read.
  */
 @Component
 public class ReceiptPublisher {
 
 	private static final ZoneId BANGKOK = ZoneId.of("Asia/Bangkok");
+	private static final String NO_REASON = "none";
 
 	private final JsonMapper mapper = JsonMapper.builder().build();
 	private final BranchKafkaProperties properties;
+	private final MeterRegistry meters;
 
-	public ReceiptPublisher(BranchKafkaProperties properties) {
+	public ReceiptPublisher(BranchKafkaProperties properties, MeterRegistry meters) {
 		this.properties = properties;
+		this.meters = meters;
+		// Registered up front, so every series exists from the first scrape and rate() works from the first event
+		for (Outcome outcome : Outcome.values()) {
+			counter(outcome.name(), NO_REASON);
+		}
+		for (RejectReason reason : RejectReason.values()) {
+			counter(Receipt.REJECTED, reason.name());
+		}
 	}
 
 	/** @throws ReceiptNotSentException if the branch broker did not acknowledge the receipt in time */
@@ -43,6 +60,16 @@ public class ReceiptPublisher {
 		catch (ExecutionException | TimeoutException | RuntimeException e) {
 			throw new ReceiptNotSentException(receipt, e);
 		}
+		counter(receipt.outcome(), receipt.rejectReason() == null ? NO_REASON : receipt.rejectReason().name())
+				.increment();
+	}
+
+	private Counter counter(String outcome, String reason) {
+		return Counter.builder("branch_sales.receipts")
+				.description("Receipts acknowledged by the branch, by outcome and reject reason")
+				.tag("outcome", outcome)
+				.tag("reason", reason)
+				.register(meters);
 	}
 
 	byte[] toJson(Receipt receipt) {

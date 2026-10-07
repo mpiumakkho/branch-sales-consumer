@@ -5,7 +5,7 @@ The HQ database and the consumer for local development and the demo, the HQ cert
 | Service | Image | Purpose |
 |---|---|---|
 | `hq-db` | `postgres:18.6-alpine` | HQ database `hq_sales`. Tables are created by the consumer's migrations |
-| `consumer` | built from this repo (`../Dockerfile`) | The HQ consumer, profile `consumer`. The only HQ container on the `wan` network: it connects out to every branch. Health and metrics on `127.0.0.1:8081` (`CONSUMER_HTTP_PORT`) |
+| `consumer` | built from this repo (`../Dockerfile`) | The HQ consumer, profile `consumer`. The only HQ container on the `wan` network: it connects out to every branch. Health and metrics on `127.0.0.1:8081` (`CONSUMER_HTTP_PORT`), bound to the consumer's `hq` address so `wan` cannot reach them |
 
 ## Run
 
@@ -52,7 +52,7 @@ Offboarding clears the branch's address in the registry (the consumer disconnect
  └──────────────────────────────┘   └─────────────────────────┘   └──────────────────────┘
 ```
 
-- `branch-sales-hq`: the consumer and the HQ DB.
+- `branch-sales-hq`: the consumer and the HQ DB. Fixed subnet `10.231.0.0/24` (`HQ_SUBNET`), the consumer at `10.231.0.10` (`HQ_CONSUMER_IP`): the consumer's health/metrics port listens on that address only.
 - `branch-sales-wan`: stands in for the internet. HQ's only container on it is the consumer, which connects out. There is no HQ port on it: `smoke-test.sh` checks that `hq-db` cannot be resolved from `wan` and that no other HQ container is on it.
 - Each branch joins `wan` with its edge only (alias `kafka.<branch>.example`), which forwards port 9094 to the branch broker's `SASL_SSL` listener. The branch side is described in the producer repo.
 
@@ -71,6 +71,7 @@ Offboarding clears the branch's address in the registry (the consumer disconnect
 1. the HQ DB accepts connections
 2. a client on `wan` cannot resolve `hq-db`
 3. no HQ container other than the consumer is on `wan`
+4. `wan` cannot open the consumer's health/metrics port (when the consumer is running)
 
 Each branch has its own smoke test (`smoke-test.sh` in the producer repo), run from `wan` as HQ would connect.
 

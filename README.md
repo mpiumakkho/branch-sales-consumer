@@ -37,14 +37,14 @@ branch registry (table branch, kafka_bootstrap)  ──► one listener containe
 
 ## Monitoring
 
-Health and Prometheus metrics on the HTTP port (`CONSUMER_HTTP_PORT`, 8081; in `infra/` published on this machine only). There is no authentication: keep the port inside the HQ network.
+Health and Prometheus metrics on the HTTP port (`CONSUMER_HTTP_PORT`, 8081). There is no authentication: the consumer is also on the `wan` network, so in Docker it binds the port to its HQ-network address only (`CONSUMER_HTTP_ADDRESS`, set by `infra/docker-compose.yml`; `infra/smoke-test.sh` checks that `wan` cannot reach it) and `infra/` publishes it on this machine only.
 
 | Endpoint | Content |
 |---|---|
 | `/actuator/health` | `UP` or `DOWN`. Component `branches`: `registered` and `connected` branches of this shard, `unreachable` with the reason per branch, `lastRegistryRefresh`. The instance is `DOWN` when the registry has branches for its shard and none is connected; one unreachable branch keeps it `UP` and is listed. Component `db`: the HQ database |
-| `/actuator/prometheus` | `branch_sales_records_total{outcome,reason}` records handled by receipt outcome (`reason` is the reject reason for `REJECTED`, else `none`); `branch_sales_branches_registered`, `_connected`, `_unreachable`; `branch_sales_dead_letters_open` rejected records not replayed successfully yet (all shards, one count query per scrape); plus the Kafka client, JDBC pool and JVM metrics from Spring Boot |
+| `/actuator/prometheus` | `branch_sales_receipts_total{outcome,reason}` receipts the branches acknowledged, by outcome (`reason` is the reject reason for `REJECTED`, else `none`); counted after the ack, from batches and replays alike, and every series exists from start-up. `branch_sales_branches_registered`, `_connected`, `_unreachable`. `branch_sales_dead_letters_open` rejected records not replayed successfully yet (all shards), read from the database at the replay interval, never during a scrape. Plus the JDBC pool, HTTP and JVM metrics from Spring Boot. The Kafka clients of the branches are not instrumented (one set of client metrics per branch would be thousands of series) |
 
-Alerts worth having: `branch_sales_branches_unreachable > 0` for longer than a registry refresh, `increase(branch_sales_records_total{outcome="REJECTED"}[1h]) > 0`, `branch_sales_dead_letters_open` growing, and health `DOWN`.
+Alerts worth having: `branch_sales_branches_unreachable > 0` for longer than a registry refresh, `increase(branch_sales_receipts_total{outcome="REJECTED"}[1h]) > 0`, `branch_sales_dead_letters_open` growing, and health `DOWN`. A listener that stops itself because the branch broker refuses HQ's credentials (wrong password, missing ACL) is reported as unreachable at the next refresh and reconnected at the one after, so it shows up as `unreachable` flapping once a minute.
 
 ## Replaying rejected records
 
@@ -100,6 +100,7 @@ Configuration (environment variables):
 | `BRANCH_KAFKA_TRUSTSTORE` | `/certs/ca.crt` | the HQ CA certificate (PEM) that signs every branch broker certificate; host names are verified |
 | `BRANCH_KAFKA_PASSWORD_DIR` | `/run/secrets/branch-kafka` | one file per branch code with HQ's password at that branch (written by `onboard-branch.sh`) |
 | `CONSUMER_HTTP_PORT` | `8081` | health and metrics (see Monitoring) |
+| `CONSUMER_HTTP_ADDRESS` | `0.0.0.0` | address the HTTP port binds to; `infra/docker-compose.yml` sets the consumer's hq-network address |
 | `CONSUMER_SHARD` | `default` | this instance reads the branches whose `branch.shard` is this value (`a-z 0-9 -`, up to 30 characters) |
 | `BRANCH_REGISTRY_REFRESH_MS` | `60000` | how often the registry is read to connect or disconnect branches |
 | `DEAD_LETTER_REPLAY_INTERVAL_MS` | `30000` | how often replay requests are looked for |
@@ -120,4 +121,4 @@ Needs Docker. The tests start a PostgreSQL container and one Kafka container per
 | `SummaryValidatorTest` | every file in `contract/examples/` gets its expected result from the parse, schema, identity and business layers; layer order; edge cases (not JSON, repeated key, formats, out-of-range numbers) |
 | `DailySummaryFlowTest` | through two branch brokers: valid examples stored, every invalid example in `dead_letter` with unchanged bytes and a `REJECTED` receipt with the right reason, one receipt per record matched by source offset (checked against the receipt schema), `BRANCH_MISMATCH` / `KEY_MISMATCH`, revision rules R4–R6 with their receipts, replay of a dead letter after the cause is fixed, following the registry (offboard, onboard, a branch in another shard, a branch that cannot be connected yet) |
 | `DatabaseFailureTest` | a database error is retried until the record is stored, with exactly one receipt and no dead letter |
-| `ObservabilityTest` | health lists connected and unreachable branches and is `DOWN` with none connected; the Prometheus endpoint has the record counter and the branch gauges |
+| `ObservabilityTest` | health lists connected and unreachable branches and is `DOWN` with none connected; the Prometheus endpoint has the receipt counter and the branch gauges |
