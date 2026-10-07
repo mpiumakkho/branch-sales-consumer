@@ -5,7 +5,7 @@ The HQ database and the consumer for local development and the demo, the HQ cert
 | Service | Image | Purpose |
 |---|---|---|
 | `hq-db` | `postgres:18.6-alpine` | HQ database `hq_sales`. Tables are created by the consumer's migrations |
-| `consumer` | built from this repo (`../Dockerfile`) | The HQ consumer, profile `consumer`. The only HQ container on the `wan` network: it connects out to every branch |
+| `consumer` | built from this repo (`../Dockerfile`) | The HQ consumer, profile `consumer`. The only HQ container on the `wan` network: it connects out to every branch. Health and metrics on `127.0.0.1:8081` (`CONSUMER_HTTP_PORT`) |
 
 ## Run
 
@@ -16,6 +16,7 @@ tls/generate-certs.sh         # HQ CA in tls/out/ (git-ignored)
 docker compose --profile consumer up -d --build
 docker compose ps             # hq-db healthy, hq-consumer up
 ./smoke-test.sh
+curl -s localhost:8081/actuator/health   # {"status":"UP", ... "branches": {... "connected": 0 ...}}
 ```
 
 Without `--profile consumer` only the database starts (for running the consumer from the IDE). Stop with `docker compose --profile consumer down`; add `-v` to delete the DB data.

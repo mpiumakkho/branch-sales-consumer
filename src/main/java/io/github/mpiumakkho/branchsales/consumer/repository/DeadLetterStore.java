@@ -46,6 +46,13 @@ public class DeadLetterStore {
 				.update();
 	}
 
+	/** Rejected records that have not been replayed successfully: still waiting for a fix at HQ (metrics). */
+	public long countOpen() {
+		return jdbc.sql("select count(*) from dead_letter where replay_result is null or replay_result = 'REJECTED'")
+				.query(Long.class)
+				.single();
+	}
+
 	/**
 	 * Rows of the given branches whose replay was requested after their last replay, oldest first. Each consumer
 	 * instance passes the branches it is connected to, so a row is replayed by the instance that can send the receipt.

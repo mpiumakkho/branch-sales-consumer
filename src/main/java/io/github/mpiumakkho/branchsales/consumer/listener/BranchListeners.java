@@ -1,10 +1,14 @@
 package io.github.mpiumakkho.branchsales.consumer.listener;
 
+import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
@@ -50,6 +54,10 @@ public class BranchListeners implements DisposableBean {
 	private final BranchKafkaProperties properties;
 	private final DailySummaryListener listener;
 	private final Map<String, Connection> connections = new ConcurrentHashMap<>();
+	// Branches of the last refresh that could not be connected, with the reason (health endpoint)
+	private final Map<String, String> unreachable = new ConcurrentHashMap<>();
+	private final AtomicInteger registered = new AtomicInteger();
+	private final AtomicReference<Instant> lastRefresh = new AtomicReference<>();
 
 	public BranchListeners(BranchRegistry registry, BranchKafkaClients clients, BranchKafkaProperties properties,
 			DailySummaryListener listener) {
@@ -61,26 +69,46 @@ public class BranchListeners implements DisposableBean {
 
 	@Scheduled(initialDelay = 0, fixedDelayString = "${branch-sales.branch-kafka.registry-refresh-ms}")
 	public synchronized void refresh() {
-		Map<String, String> registered = registry.kafkaAddresses(properties.shard());
+		Map<String, String> addresses = registry.kafkaAddresses(properties.shard());
 		for (String branchCode : Set.copyOf(connections.keySet())) {
-			String bootstrap = registered.get(branchCode);
+			String bootstrap = addresses.get(branchCode);
 			if (bootstrap == null || !bootstrap.equals(connections.get(branchCode).bootstrap())) {
 				disconnect(branchCode);
 			}
 		}
-		registered.forEach((branchCode, bootstrap) -> {
+		unreachable.keySet().retainAll(addresses.keySet());
+		addresses.forEach((branchCode, bootstrap) -> {
 			if (!connections.containsKey(branchCode)) {
 				try {
 					connect(branchCode, bootstrap);
+					unreachable.remove(branchCode);
 				}
 				catch (RuntimeException e) {
 					// e.g. the branch host name does not resolve or HQ's password for it is not installed yet; tried again
 					// at the next refresh
-					log.error("Cannot connect to branch {} at {}: {}", branchCode, bootstrap,
-							NestedExceptionUtils.getMostSpecificCause(e).getMessage());
+					String cause = NestedExceptionUtils.getMostSpecificCause(e).getMessage();
+					unreachable.put(branchCode, bootstrap + ": " + cause);
+					log.error("Cannot connect to branch {} at {}: {}", branchCode, bootstrap, cause);
 				}
 			}
 		});
+		registered.set(addresses.size());
+		lastRefresh.set(Instant.now());
+	}
+
+	/** Branches of this shard in the registry at the last refresh. */
+	public int registeredBranches() {
+		return registered.get();
+	}
+
+	/** Branches of the last refresh that could not be connected, with the reason. */
+	public Map<String, String> unreachableBranches() {
+		return new TreeMap<>(unreachable);
+	}
+
+	/** When the registry was last read, or empty before the first refresh. */
+	public Optional<Instant> lastRefresh() {
+		return Optional.ofNullable(lastRefresh.get());
 	}
 
 	/** Branches with a running listener. */

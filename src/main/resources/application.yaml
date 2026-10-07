@@ -31,6 +31,19 @@ spring:
         request.timeout.ms: 10000
         max.block.ms: 10000
 
+# Health and metrics only (README, Monitoring): GET /actuator/health and /actuator/prometheus. No authentication:
+# publish the port to the HQ network only
+server:
+  port: ${CONSUMER_HTTP_PORT:8081}
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus
+  endpoint:
+    health:
+      show-details: always
+
 branch-sales:
   branch-kafka:
     # Both topics exist in every branch cluster (contract/README.md)

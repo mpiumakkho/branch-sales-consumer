@@ -35,6 +35,17 @@ branch registry (table branch, kafka_bootstrap)  ──► one listener containe
 - Branches are connected from the registry: a row with a `kafka_bootstrap` address is connected within a minute, a cleared address disconnects, a changed address reconnects. A branch that cannot be connected yet (host name not resolvable, password file missing) is tried again at every refresh. See [infra/README.md](infra/README.md#onboarding-a-branch).
 - Several consumer instances can share the branches: each instance is started with a shard name (`CONSUMER_SHARD`) and reads only the branches whose registry row has that shard (`infra/onboard-branch.sh`, `BRANCH_SHARD`). Moving a branch to another shard in the registry moves it between instances within a minute. Replays of rejected records are done by the instance that reads the branch. Measured cost per connected branch and sizing: [bench/README.md](bench/README.md) (about 1 MB RSS, 3 threads and 0.15% of a core idle per branch; 300–500 branches per instance is a reasonable shard).
 
+## Monitoring
+
+Health and Prometheus metrics on the HTTP port (`CONSUMER_HTTP_PORT`, 8081; in `infra/` published on this machine only). There is no authentication: keep the port inside the HQ network.
+
+| Endpoint | Content |
+|---|---|
+| `/actuator/health` | `UP` or `DOWN`. Component `branches`: `registered` and `connected` branches of this shard, `unreachable` with the reason per branch, `lastRegistryRefresh`. The instance is `DOWN` when the registry has branches for its shard and none is connected; one unreachable branch keeps it `UP` and is listed. Component `db`: the HQ database |
+| `/actuator/prometheus` | `branch_sales_records_total{outcome,reason}` records handled by receipt outcome (`reason` is the reject reason for `REJECTED`, else `none`); `branch_sales_branches_registered`, `_connected`, `_unreachable`; `branch_sales_dead_letters_open` rejected records not replayed successfully yet (all shards, one count query per scrape); plus the Kafka client, JDBC pool and JVM metrics from Spring Boot |
+
+Alerts worth having: `branch_sales_branches_unreachable > 0` for longer than a registry refresh, `increase(branch_sales_records_total{outcome="REJECTED"}[1h]) > 0`, `branch_sales_dead_letters_open` growing, and health `DOWN`.
+
 ## Replaying rejected records
 
 `dead_letter` keeps the branch, source offset, the record key and value bytes, reject reason, detail and time. When the cause is fixed at HQ (for example a category was added to `category`), ask for the record to be processed again:
@@ -88,6 +99,7 @@ Configuration (environment variables):
 | `BRANCH_KAFKA_SECURITY_PROTOCOL` | `SASL_SSL` | how every branch broker is reached: TLS + SCRAM-SHA-512 as user `hq`. `PLAINTEXT` for tests only |
 | `BRANCH_KAFKA_TRUSTSTORE` | `/certs/ca.crt` | the HQ CA certificate (PEM) that signs every branch broker certificate; host names are verified |
 | `BRANCH_KAFKA_PASSWORD_DIR` | `/run/secrets/branch-kafka` | one file per branch code with HQ's password at that branch (written by `onboard-branch.sh`) |
+| `CONSUMER_HTTP_PORT` | `8081` | health and metrics (see Monitoring) |
 | `CONSUMER_SHARD` | `default` | this instance reads the branches whose `branch.shard` is this value (`a-z 0-9 -`, up to 30 characters) |
 | `BRANCH_REGISTRY_REFRESH_MS` | `60000` | how often the registry is read to connect or disconnect branches |
 | `DEAD_LETTER_REPLAY_INTERVAL_MS` | `30000` | how often replay requests are looked for |
@@ -108,3 +120,4 @@ Needs Docker. The tests start a PostgreSQL container and one Kafka container per
 | `SummaryValidatorTest` | every file in `contract/examples/` gets its expected result from the parse, schema, identity and business layers; layer order; edge cases (not JSON, repeated key, formats, out-of-range numbers) |
 | `DailySummaryFlowTest` | through two branch brokers: valid examples stored, every invalid example in `dead_letter` with unchanged bytes and a `REJECTED` receipt with the right reason, one receipt per record matched by source offset (checked against the receipt schema), `BRANCH_MISMATCH` / `KEY_MISMATCH`, revision rules R4–R6 with their receipts, replay of a dead letter after the cause is fixed, following the registry (offboard, onboard, a branch in another shard, a branch that cannot be connected yet) |
 | `DatabaseFailureTest` | a database error is retried until the record is stored, with exactly one receipt and no dead letter |
+| `ObservabilityTest` | health lists connected and unreachable branches and is `DOWN` with none connected; the Prometheus endpoint has the record counter and the branch gauges |

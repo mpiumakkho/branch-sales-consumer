@@ -45,6 +45,12 @@ docker exec hq-db psql -U hq_app -d hq_sales -c "select id, branch_code, source_
 branch-sales-producer/demo-branches/sync-state.sh BR0001
 # Branch: days in the back-office
 branch-sales-producer/demo-branches/sql.sh BR0001 branch-sales-producer/demo-branches/branch-status.sql
+# Health: HQ consumer (connected / unreachable branches), producer of BR0001 (its Kafka, MongoDB, database)
+curl -s localhost:8081/actuator/health
+curl -s localhost:8091/actuator/health          # BR0002: 8092
+# Metrics in Prometheus format: records by outcome at HQ, sync_state by status at the branch
+curl -s localhost:8081/actuator/prometheus | grep branch_sales
+curl -s localhost:8091/actuator/prometheus | grep branch_sales
 ```
 
 ## 1. Start HQ

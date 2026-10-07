@@ -52,6 +52,9 @@ services:
       BRANCH_KAFKA_PASSWORD_DIR: /run/secrets/branch-kafka
       # Branches this instance reads (registry column shard). One instance with every branch in "default" here.
       CONSUMER_SHARD: ${CONSUMER_SHARD:-default}
+    ports:
+      # Health and metrics (/actuator/health, /actuator/prometheus), this machine only; no authentication
+      - "127.0.0.1:${CONSUMER_HTTP_PORT:-8081}:8081"
     volumes:
       # HQ CA certificate (tls/generate-certs.sh). Only the certificate: the CA key stays on the host.
       - ./tls/out/ca.crt:/certs/ca.crt:ro
