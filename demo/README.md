@@ -15,12 +15,14 @@ Runs HQ (HQ database, consumer) and two branches (back-office database, MongoDB,
  branch-br0002 (network)
 ```
 
-HQ connects out to each branch; neither side has an inbound port other than the branch edge's 9094. Each branch's Kafka holds `branch-sales.daily-summary` (written by the producer, read by HQ) and `branch-sales.receipt` (written by HQ, read by the producer).
+HQ connects out to each branch; neither side has an inbound port other than the branch edge's 9094. Each branch's Kafka holds the record topics `branch-sales.daily-summary`, `branch-sales.daily-return` and `branch-sales.shift-close` (written by the producer, read by HQ) and `branch-sales.receipt` (written by HQ, read by the producer).
 
 | Branch | Back-office category codes | Branch configuration |
 |---|---|---|
 | BR0001 | `BEV`, `SNK`, `RTE`, `HH`, `GC` | `branch-sales-producer/demo-branches/BR0001/branch.yaml` (`GC` maps to `GIFT_CARD`, which HQ does not have yet) |
 | BR0002 | `C01`, `C02`, `C03`, `C05`, `C08`, `C99` | `branch-sales-producer/demo-branches/BR0002/branch.yaml` (`C01` and `C02` both map to `BEVERAGE`; `C99` is not mapped) |
+
+The POS tender codes are mapped the same way (`branch-sales.tender-mapping`): BR0001 `CSH`, `CRD`, `DBT`, `QR`; BR0002 `T1`, `T2`, `T3`, with `GV` (gift voucher) not mapped.
 
 The demo branches start a send round every minute with up to 15 s random delay, and read confirmed days of the last 10 years (the demo days are fixed dates). The real defaults are every hour with up to 30 minutes, and 60 days (requirements Q4, §6).
 
@@ -82,7 +84,7 @@ cp branch-sales-producer/.env.example branch-sales-producer/.env
 (cd branch-sales-producer && HQ_KAFKA_PASSWORD=pw-hq-at-br0002 ./smoke-test.sh BR0002 ../branch-sales-consumer/infra/tls/out/ca.crt)
 ```
 
-Each branch's `kafka-init` creates the three topics (sales, returns, receipts), user `hq` and its ACLs, then exits. The smoke test connects from `wan` as HQ does (TLS with the HQ CA, host name checked, SCRAM) and checks that nothing but the edge's port 9094 is reachable. Within a minute, `docker logs hq-consumer` shows `Connected to branch BR0001 at kafka.br0001.example:9094` and the same for BR0002.
+Each branch's `kafka-init` creates the four topics (sales, returns, shift closes, receipts), user `hq` and its ACLs, then exits. The smoke test connects from `wan` as HQ does (TLS with the HQ CA, host name checked, SCRAM) and checks that nothing but the edge's port 9094 is reachable. Within a minute, `docker logs hq-consumer` shows `Connected to branch BR0001 at kafka.br0001.example:9094` and the same for BR0002.
 
 ## 3. Scenarios
 
@@ -202,7 +204,81 @@ branch-sales-producer/demo-branches/sql.sh BR0001 branch-sales-producer/demo-bra
 
 and when HQ stores them it asks for the waiting returns itself (`docker logs hq-consumer`: `Replayed dead letter 2 (DAILY_RETURN BR0001 offset 1): INSERTED`). The branch gets a second receipt and shows `HQ_ACCEPTED` for the returns; `hq-status.sql` lists `SALES` and `RETURN` rows for 2026-10-05.
 
-### 3.6 Branch offline
+### 3.6 Shift closes of the POS terminals
+
+```bash
+branch-sales-producer/demo-branches/sql.sh BR0001 branch-sales-producer/demo-branches/BR0001/07-shift-close.sql
+```
+
+**(a) Three shifts closed.** The POS opens a shift (`OPEN`) and closes it with the Z-report (`CLOSED`, revision + 1): POS01 shift 1 and shift 2, and POS02 shift 1. Only closed shifts are sent, to the branch's third topic `branch-sales.shift-close`, after the sales and returns of the same round. The branch's local tender codes (`CSH`, `CRD`, `DBT`, `QR`) are mapped to HQ tender types (`branch-sales.tender-mapping` in `branch.yaml`, [contract/tender-types.md](../contract/tender-types.md)). HQ stores one row per (branch, business date, terminal, shift) and answers each with `INSERTED`; the receipt carries `terminalId` and `shiftNo` besides `saleDate` (the business date). `hq-status.sql` lists them as `SHIFT` rows, with the tenders as lines and `cash_over_short` computed at HQ (cash counted - cash expected; POS01 shift 1 counted 9100.00 against 9120.00 expected, so `-20.00`):
+
+```
+ record | branch_code | business_date | revision | total_amount | terminal_shift | cash_over_short | ... | lines
+ SHIFT  | BR0001      | 2026-10-01    |        1 |          ... | POS01#1        |          -20.00 | ... | CASH ... x..., CREDIT_CARD ... x..., QR_PAYMENT ... x...
+```
+
+**(b) Reopen and close again.**
+
+```bash
+branch-sales-producer/demo-branches/sql.sh BR0001 branch-sales-producer/demo-branches/BR0001/08-reopen-shift.sql
+```
+
+The cashier reopens POS01 shift 1 and recounts the drawer. Closing it again raises its revision to 2; the shift number stays the same (R11). HQ replaces the header and the tender lines (`UPDATED stored revision 2`) and recomputes `cash_over_short`. The other shifts are not touched.
+
+**(c) A shift before the day's sales.**
+
+```bash
+branch-sales-producer/demo-branches/sql.sh BR0002 branch-sales-producer/demo-branches/BR0002/04-shift-before-summary.sql
+```
+
+BR0002 closes a shift of a day whose sales it has not confirmed. Unlike a return (3.5), a shift close has no parent: HQ stores it (`INSERTED`), nothing goes to `dead_letter`, and there is no `PARENT_MISSING` (R12). Shifts close during the day and the day is confirmed in the evening, so either can arrive first. To compare the shifts of a day with its sales:
+
+```bash
+docker exec -i hq-db psql -U hq_app -d hq_sales < branch-sales-consumer/demo/hq-reconciliation.sql
+```
+
+One row per branch and business day: the number of shifts, the sum of their totals, the daily sales total, the difference, and the sum of over/short. This is a query, not a rule: HQ rejects neither side over a difference (R13). Here BR0002's day shows the shift total and no daily sales total until the day is confirmed.
+
+**(d) A tender code with no HQ mapping.**
+
+```bash
+branch-sales-producer/demo-branches/sql.sh BR0002 branch-sales-producer/demo-branches/BR0002/05-shift-unmapped-tender.sql
+```
+
+The shift has payments with `GV` (gift voucher), which is not in BR0002's tender mapping. As with an unmapped category (3.3), the producer does not send it; `sync-state.sh BR0002` shows the shift `FAILED` with the unmapped code, tried again every round.
+
+**(e) A tender type HQ does not have, and its replay.** Map `GV` to a tender type HQ does not have yet (add `GV: GIFT_VOUCHER` under `branch-sales.tender-mapping` in `branch-sales-producer/demo-branches/BR0002/branch.yaml`) and restart the producer:
+
+```bash
+(cd branch-sales-producer && docker compose -f docker-compose.yml -f demo-branches/BR0002.compose.yaml restart producer)
+```
+
+The next round sends the shift and HQ rejects it with `UNKNOWN_TENDER`: `dead_letter` has a row with `record_type = SHIFT_CLOSE` and `record_date` = the business date, and the branch shows `HQ_REJECTED  ... UNKNOWN_TENDER: tenderType [GIFT_VOUCHER] is not in the tender_type table`. HQ adds the tender type and asks for the replay, as in 3.4:
+
+```bash
+docker exec hq-db psql -U hq_app -d hq_sales -c "insert into tender_type (tender_type, description) values ('GIFT_VOUCHER', 'Gift voucher')"
+docker exec hq-db psql -U hq_app -d hq_sales -c "update dead_letter set replay_requested_at = now() where record_type = 'SHIFT_CLOSE' and reject_reason = 'UNKNOWN_TENDER' and replayed_at is null"
+```
+
+Within 30 s the consumer replays it (`Replayed dead letter ... (SHIFT_CLOSE BR0002 offset ...): INSERTED`) and the branch gets a second receipt (`HQ_ACCEPTED`). Undo the mapping change afterwards if you want to run this scenario again.
+
+**(f) Optional: a branch that cannot read the shift topic yet.** A branch whose `kafka-init` has not created the shift topic, or has not given HQ access to it, is read for the topics it has. Remove HQ's Read on the shift topic at BR0002:
+
+```bash
+MSYS_NO_PATHCONV=1 docker exec branch-br0002-kafka-1 /opt/kafka/bin/kafka-acls.sh --bootstrap-server localhost:19092 \
+  --remove --force --allow-principal User:hq --operation Read --operation Describe --topic branch-sales.shift-close
+docker restart hq-consumer
+```
+
+After the restart, `docker logs hq-consumer` shows `Branch BR0002 has only [branch-sales.daily-summary, branch-sales.daily-return] of the record topics [...]: reading those until its kafka-init adds the rest`, and BR0002's sales and returns are still stored. Shift closes wait in the branch's Kafka. Run `kafka-init` again to restore the ACL:
+
+```bash
+(cd branch-sales-producer && docker compose -f docker-compose.yml -f demo-branches/BR0002.compose.yaml up -d kafka-init)
+```
+
+Within a minute the consumer logs `Branch BR0002 now has all record topics; reconnecting` and reads the waiting shift closes.
+
+### 3.7 Branch offline
 
 Cut BR0002 off from the WAN by stopping its edge, then confirm a day:
 
@@ -225,7 +301,7 @@ Reconnect:
 
 HQ's client for BR0002 finds the broker again, reads the waiting record and answers; the branch shows `HQ_ACCEPTED`. Nothing was sent twice: the record waited in the branch's Kafka. If the branch's broker had lost it (a `SENT` day without a receipt after `SEND_RESEND_AFTER`, 24 hours by default), the producer would send it again, and HQ would answer `DUPLICATE` if it had stored it after all.
 
-### 3.7 Offboard and onboard a branch
+### 3.8 Offboard and onboard a branch
 
 HQ stops reading BR0001 (for example, HQ's password at that branch leaked), and BR0001 confirms a day meanwhile:
 
@@ -253,7 +329,7 @@ Within a minute the consumer connects again, reads the waiting day and HQ stores
 (cd branch-sales-consumer/infra && docker compose --profile consumer down -v)
 ```
 
-`-v` deletes the branch databases, MongoDB, the branches' Kafka data (including user `hq`) and the HQ database. Leave it out to keep the data. Delete `branch-sales-consumer/infra/tls/out/` and `branch-sales-consumer/infra/secrets/` to start over with a new CA; every branch then needs onboarding again.
+`-v` deletes the branch databases, MongoDB, the branches' Kafka data (including user `hq`) and the HQ database. Leave it out to keep the data. The back-office tables (`branch-db-data` volume) are created by init scripts that run only on an empty volume: a branch started before the shift close tables existed (`pos_shift`, `pos_shift_tender`) needs `down -v` once to get them; until then its producer keeps sending sales and returns and logs an error for shift closes every round. HQ adds its tables itself at start (Flyway V8). Delete `branch-sales-consumer/infra/tls/out/` and `branch-sales-consumer/infra/secrets/` to start over with a new CA; every branch then needs onboarding again.
 
 ## Known limits
 

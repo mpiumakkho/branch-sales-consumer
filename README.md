@@ -2,11 +2,11 @@
 
 [![ci](https://github.com/mpiumakkho/branch-sales-consumer/actions/workflows/ci.yml/badge.svg)](https://github.com/mpiumakkho/branch-sales-consumer/actions/workflows/ci.yml)
 
-HQ side of Branch Daily Sales Sync. Every branch runs its own Kafka broker; the consumer connects to each branch in the HQ branch registry, reads the records the branch published (daily sales summaries and daily returns, one topic each), validates them against the [message contract](contract/), stores them in the HQ PostgreSQL database, and writes a receipt back to the branch for every record.
+HQ side of Branch Daily Sales Sync. Every branch runs its own Kafka broker; the consumer connects to each branch in the HQ branch registry, reads the records the branch published (daily sales summaries, daily returns and POS shift closes, one topic each), validates them against the [message contract](contract/), stores them in the HQ PostgreSQL database, and writes a receipt back to the branch for every record.
 
 | Folder | Content |
 |---|---|
-| [`contract/`](contract/) | Message contract shared with the branch producer: summary and receipt JSON Schemas, examples, topics |
+| [`contract/`](contract/) | Message contract shared with the branch producer: summary, return, shift close and receipt JSON Schemas, examples, topics |
 | [`infra/`](infra/) | Docker Compose for the HQ database and the consumer, HQ CA, branch onboarding scripts |
 | [`demo/`](demo/) | End-to-end demo with two branches: [demo/README.md](demo/README.md) |
 | [`bench/`](bench/) | Scale measurement: cost of a connected branch in the consumer JVM and records per second, with results: [bench/README.md](bench/README.md) |
@@ -17,8 +17,8 @@ HQ side of Branch Daily Sales Sync. Every branch runs its own Kafka broker; the 
 ```
 branch registry (table branch, kafka_bootstrap)  ──► one listener container per branch, refreshed every minute
         │
-        └──► branch-sales.daily-summary and branch-sales.daily-return in that branch's Kafka ──► per record (type = topic):
-                  parse → schema of the type → identity (branch, key) → business → reference (branch, category; a return: its day's sales)
+        └──► branch-sales.daily-summary, .daily-return and .shift-close in that branch's Kafka ──► per record (type = topic):
+                  parse → schema of the type → identity (branch, key) → business → reference (branch, category or tender; a return: its day's sales)
                                      │ fail                                 │ pass
                                      ▼                                      ▼
                         table dead_letter (bytes unchanged)      upsert by revision, own DB transaction
@@ -29,11 +29,11 @@ branch registry (table branch, kafka_bootstrap)  ──► one listener containe
 
 - The consumer reaches a branch through the address registered for it, so the cluster identifies the sender: a message whose `branchCode` is not that branch is rejected (`BRANCH_MISMATCH`), as is a key that is not the `branchCode` (`KEY_MISMATCH`). Validation layers and reject reasons: [`contract/README.md`](contract/README.md). The schema files are copied from `contract/` onto the classpath at build time, so there is one copy only.
 - Each record gets its own database transaction. A rejected record is kept in `dead_letter` and the batch continues.
-- Record types: a `DailySalesSummary` goes to `branch_daily_sales`, a `DailyReturn` to `branch_daily_return`, through the same pipeline (`RecordType` names the schema, the date field and the tables). A return whose day's sales are not stored yet is rejected with `PARENT_MISSING` and held in `dead_letter`; when the sales of that branch and date are stored (from a batch or a replay), the same transaction asks for the return's replay, and the replayer sends the branch a second receipt within the replay interval. Sales and returns of one branch arrive on two topics, so their order is not guaranteed; this is what makes the arrival order irrelevant.
+- Record types: a `DailySalesSummary` goes to `branch_daily_sales`, a `DailyReturn` to `branch_daily_return`, a `ShiftClose` to `branch_shift_close`, through the same pipeline (`RecordType` names the schema, the key fields, the line code and its master table, and the tables). A summary or a return is keyed by its date; a shift close by business date, terminal and shift number, with tender lines checked against `tender_type`. A shift close has no parent: it is stored with or without the day's sales, and the difference between the two is a report (`demo/hq-reconciliation.sql`), not a rejection. A return whose day's sales are not stored yet is rejected with `PARENT_MISSING` and held in `dead_letter`; when the sales of that branch and date are stored (from a batch or a replay), the same transaction asks for the return's replay, and the replayer sends the branch a second receipt within the replay interval. Sales and returns of one branch arrive on two topics, so their order is not guaranteed; this is what makes the arrival order irrelevant.
 - Every record gets a receipt (`INSERTED`, `UPDATED`, `DUPLICATE`, `STALE` or `REJECTED` with the reason), written to the branch's receipt topic after the database commit. The consumer waits for the branch broker's ack before moving on, and commits offsets after the listener returns (ack mode `BATCH`), so a branch never misses a receipt for a record HQ has handled.
 - Revisions (rules R4–R6): one `INSERT ... ON CONFLICT DO UPDATE ... WHERE stored.revision < incoming.revision`. A higher revision replaces the header and all lines; the same revision is `DUPLICATE`; a lower one is `STALE` (logged at WARN). Neither is a rejection.
 - Any other failure (HQ database or the branch broker unreachable) is retried with exponential back-off (1 s up to 60 s) and no attempt limit, per branch. Records before the failed one are committed; that branch waits at the failed record and nothing is skipped. Other branches are not affected: each has its own container and thread.
-- Branches are connected from the registry: a row with a `kafka_bootstrap` address is connected within a minute, a cleared address disconnects, a changed address reconnects. Before subscribing, the consumer asks the branch broker which record topics it can read: a branch not yet upgraded (no `branch-sales.daily-return` or no ACL on it) is read for its sales only, and reconnected with both topics once its `kafka-init` has run. A branch that cannot be connected yet (host name not resolvable, password file missing) is tried again at every refresh. See [infra/README.md](infra/README.md#onboarding-a-branch).
+- Branches are connected from the registry: a row with a `kafka_bootstrap` address is connected within a minute, a cleared address disconnects, a changed address reconnects. Before subscribing, the consumer asks the branch broker which record topics it can read: a branch not yet upgraded (no `branch-sales.daily-return` or `branch-sales.shift-close`, or no ACL on it) is read for the topics it has, and reconnected with all of them once its `kafka-init` has run. A branch that cannot be connected yet (host name not resolvable, password file missing) is tried again at every refresh. See [infra/README.md](infra/README.md#onboarding-a-branch).
 - Several consumer instances can share the branches: each instance is started with a shard name (`CONSUMER_SHARD`) and reads only the branches whose registry row has that shard (`infra/onboard-branch.sh`, `BRANCH_SHARD`). Moving a branch to another shard in the registry moves it between instances within a minute. Replays of rejected records are done by the instance that reads the branch. Measured cost per connected branch and sizing: [bench/README.md](bench/README.md) (about 1 MB RSS, 3 threads and 0.15% of a core idle per branch; 300–500 branches per instance is a reasonable shard).
 
 ## Monitoring
@@ -69,6 +69,9 @@ Flyway migrations in [`src/main/resources/db/migration`](src/main/resources/db/m
 | `branch_daily_sales_line` | Category lines of that revision |
 | `branch_daily_return` | One row per `(branch_code, return_date)` with the highest revision received; stored only when `branch_daily_sales` has that branch and date (not a foreign key: a new revision of the sales never cascades) |
 | `branch_daily_return_line` | Category lines of that revision |
+| `tender_type` | Tender types from [`contract/tender-types.md`](contract/tender-types.md), seeded by `V8` |
+| `branch_shift_close` | One row per `(branch_code, business_date, terminal_id, shift_no)` with the highest revision received: cashier, open and close times, transaction count, total, cash expected and counted, and `cash_over_short` (generated: counted - expected). No reference to `branch_daily_sales` |
+| `branch_shift_close_tender` | Tender lines of that revision; none for a shift without transactions |
 | `dead_letter` | Rejected records, one per `(branch_code, record_type, source_offset)`, with the business date when readable, replay request and result |
 
 The upsert uses `RETURNING old.*`, which needs PostgreSQL 18 or later.
@@ -109,7 +112,7 @@ Configuration (environment variables):
 | `DEAD_LETTER_REPLAY_INTERVAL_MS` | `30000` | how often replay requests are looked for |
 | `CONSUMER_MAX_POLL_RECORDS` | `100` | records per poll and branch; limits load on the HQ DB |
 
-The receipt topic, summary topic and consumer group are fixed by the contract (`branch-sales.receipt`, `branch-sales.daily-summary`, `hq-branch-sales-consumer`).
+The receipt topic, record topics and consumer group are fixed by the contract (`branch-sales.receipt`, `branch-sales.daily-summary`, `branch-sales.daily-return`, `branch-sales.shift-close`, `hq-branch-sales-consumer`).
 
 ## Test
 
@@ -121,7 +124,10 @@ Needs Docker. The tests start a PostgreSQL container and one Kafka container per
 
 | Test | Checks |
 |---|---|
-| `RecordValidatorTest` | every file in `contract/examples/` gets its expected result from the parse, schema, identity and business layers; layer order; edge cases (not JSON, repeated key, formats, out-of-range numbers); return examples are checked against the return schema and a summary fails it |
+| `RecordValidatorTest` | every file in `contract/examples/` gets its expected result from the parse, schema, identity and business layers; layer order; edge cases (not JSON, repeated key, formats, out-of-range numbers); return examples are checked against the return schema and a summary fails it; every file in `contract/shift-close-examples/` gets its expected result, shift fields and key are mapped, `SHIFT_TIMES_INVALID` and `DUPLICATE_TENDER` |
+| `DailyFiguresStoreSqlTest` | the statements built from `RecordType`: unchanged for the daily types, the four-column key for shift closes |
+| `ReceiptPublisherTest`, `ReceiptExamplesTest` | receipt JSON of a shift close carries `terminalId` and `shiftNo` and matches the receipt schema; the counters of every type and reason exist from start-up; every file in `contract/receipt-examples/` matches the schema |
 | `DailySummaryFlowTest` | through two branch brokers: valid examples stored, every invalid example in `dead_letter` with unchanged bytes and a `REJECTED` receipt with the right reason, one receipt per record matched by source offset (checked against the receipt schema), `BRANCH_MISMATCH` / `KEY_MISMATCH`, revision rules R4–R6 with their receipts, replay of a dead letter after the cause is fixed, a return stored after its day's sales and one held as `PARENT_MISSING` and replayed by HQ when the sales arrive, following the registry (offboard, onboard, a branch in another shard, a branch that cannot be connected yet) |
+| `ShiftCloseFlowTest` | shift closes of two terminals stored per key with their tenders and over/short, a reopened shift as revision 2 (`UPDATED`, `DUPLICATE`, `STALE`), a shift without the day's sales stored without `PARENT_MISSING`, a shift with no transactions, `UNKNOWN_TENDER` held and replayed after the tender type is added, `SHIFT_TIMES_INVALID`, a branch without the shift topic read partially and reconnected when it appears |
 | `DatabaseFailureTest` | a database error is retried until the record is stored, with exactly one receipt and no dead letter |
 | `ObservabilityTest` | health lists connected and unreachable branches and is `DOWN` with none connected; the Prometheus endpoint has the receipt counter and the branch gauges |
