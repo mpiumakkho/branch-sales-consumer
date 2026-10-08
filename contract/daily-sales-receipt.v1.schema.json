@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/mpiumakkho/branch-sales-consumer/contract/daily-sales-receipt.v1.schema.json",
   "title": "DailySalesReceipt",
-  "description": "What HQ did with one record of the branch (a DailySalesSummary or a DailyReturn). Written by HQ to the branch's receipt topic, one receipt per record (a replayed dead letter gets another receipt for the same record).",
+  "description": "What HQ did with one record of the branch (a DailySalesSummary, a DailyReturn or a ShiftClose). Written by HQ to the branch's receipt topic, one receipt per record (a replayed dead letter gets another receipt for the same record).",
   "type": "object",
   "required": [
     "schemaVersion",
@@ -18,7 +18,7 @@
     },
     "type": {
       "description": "Which record the receipt is for: the topic it was read from. Absent means DAILY_SUMMARY (receipts written before the return topic existed).",
-      "enum": ["DAILY_SUMMARY", "DAILY_RETURN"],
+      "enum": ["DAILY_SUMMARY", "DAILY_RETURN", "SHIFT_CLOSE"],
       "default": "DAILY_SUMMARY"
     },
     "branchCode": {
@@ -27,7 +27,7 @@
       "pattern": "^[A-Z0-9]{3,10}$"
     },
     "sourceOffset": {
-      "description": "Offset of the record in the topic of its type (one partition each): branch-sales.daily-summary or branch-sales.daily-return. Always present, also for records that are not valid JSON. Match receipts by (type, sourceOffset).",
+      "description": "Offset of the record in the topic of its type (one partition each): branch-sales.daily-summary, branch-sales.daily-return or branch-sales.shift-close. Always present, also for records that are not valid JSON. Match receipts by (type, sourceOffset).",
       "type": "integer",
       "minimum": 0
     },
@@ -37,9 +37,19 @@
       "format": "uuid"
     },
     "saleDate": {
-      "description": "Business date of the record (saleDate of a summary, returnDate of a return), when it could be read.",
+      "description": "Business date of the record (saleDate of a summary, returnDate of a return, businessDate of a shift close), when it could be read.",
       "type": "string",
       "format": "date"
+    },
+    "terminalId": {
+      "description": "terminalId of a shift close, when it could be read. Absent for the other types.",
+      "type": "string",
+      "pattern": "^[A-Z0-9_-]{1,20}$"
+    },
+    "shiftNo": {
+      "description": "shiftNo of a shift close, when it could be read. Absent for the other types.",
+      "type": "integer",
+      "minimum": 1
     },
     "revision": {
       "description": "revision of the record, when it could be read.",
@@ -51,7 +61,7 @@
       "enum": ["INSERTED", "UPDATED", "DUPLICATE", "STALE", "REJECTED"]
     },
     "storedRevision": {
-      "description": "Revision HQ holds for (type, branchCode, saleDate) after this record. Present unless outcome is REJECTED.",
+      "description": "Revision HQ holds for the record's key after this record: (type, branchCode, saleDate), plus terminalId and shiftNo for a shift close. Present unless outcome is REJECTED.",
       "type": "integer",
       "minimum": 1
     },
@@ -66,7 +76,10 @@
         "DUPLICATE_CATEGORY",
         "UNKNOWN_BRANCH",
         "UNKNOWN_CATEGORY",
-        "PARENT_MISSING"
+        "PARENT_MISSING",
+        "DUPLICATE_TENDER",
+        "UNKNOWN_TENDER",
+        "SHIFT_TIMES_INVALID"
       ]
     },
     "detail": {

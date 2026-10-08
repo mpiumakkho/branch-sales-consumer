@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "type": "SHIFT_CLOSE",
+  "branchCode": "BR0001",
+  "sourceOffset": 1,
+  "eventId": "1c6d7e8f-9a0b-4c1d-8e2f-4a5b6c7d8e9f",
+  "saleDate": "2026-10-01",
+  "terminalId": "POS01",
+  "shiftNo": 1,
+  "revision": 1,
+  "outcome": "REJECTED",
+  "rejectReason": "UNKNOWN_TENDER",
+  "detail": "UNKNOWN_TENDER: tenderType [GIFT_VOUCHER] is not in the tender_type table",
+  "processedAt": "2026-10-01T15:05:04.120+07:00"
+}

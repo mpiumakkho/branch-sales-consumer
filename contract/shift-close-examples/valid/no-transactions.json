@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "eventId": "9c4d5e6f-7a8b-4c9d-8e1f-2a3b4c5d6e7f",
+  "branchCode": "BR0001",
+  "businessDate": "2026-10-01",
+  "terminalId": "POS03",
+  "shiftNo": 2,
+  "revision": 1,
+  "confirmedAt": "2026-10-01T23:00:05+07:00",
+  "cashierId": "C112",
+  "openedAt": "2026-10-01T15:00:00+07:00",
+  "closedAt": "2026-10-01T23:00:05+07:00",
+  "transactionCount": 0,
+  "currency": "THB",
+  "totalAmount": "0.00",
+  "cashExpected": "3000.00",
+  "cashCounted": "3000.00",
+  "lines": []
+}

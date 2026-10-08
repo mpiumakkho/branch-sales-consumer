@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "type": "SHIFT_CLOSE",
+  "branchCode": "BR0001",
+  "sourceOffset": 0,
+  "eventId": "6f1c2d3e-4a5b-4c6d-8e7f-9a0b1c2d3e4f",
+  "saleDate": "2026-10-01",
+  "terminalId": "POS01",
+  "shiftNo": 1,
+  "revision": 1,
+  "outcome": "INSERTED",
+  "storedRevision": 1,
+  "processedAt": "2026-10-01T15:05:04.120+07:00"
+}

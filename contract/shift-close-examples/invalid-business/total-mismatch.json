@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "eventId": "9a4b5c6d-7e8f-4a9b-8c0d-2e3f4a5b6c7d",
+  "branchCode": "BR0001",
+  "businessDate": "2026-10-01",
+  "terminalId": "POS01",
+  "shiftNo": 1,
+  "revision": 1,
+  "confirmedAt": "2026-10-01T15:02:11+07:00",
+  "cashierId": "C101",
+  "openedAt": "2026-10-01T07:00:00+07:00",
+  "closedAt": "2026-10-01T15:02:11+07:00",
+  "transactionCount": 212,
+  "currency": "THB",
+  "totalAmount": "18500.00",
+  "cashExpected": "9120.00",
+  "cashCounted": "9100.00",
+  "lines": [
+    { "tenderType": "CASH", "amount": "9120.00", "quantity": 140 },
+    { "tenderType": "CREDIT_CARD", "amount": "6230.00", "quantity": 48 },
+    { "tenderType": "QR_PAYMENT", "amount": "3100.00", "quantity": 24 }
+  ]
+}

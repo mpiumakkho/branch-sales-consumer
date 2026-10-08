@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "eventId": "1e6f7a8b-9c0d-4e1f-8a2b-4c5d6e7f8a9b",
+  "branchCode": "BR0002",
+  "businessDate": "2026-10-01",
+  "terminalId": "T-01",
+  "shiftNo": 1,
+  "revision": 1,
+  "confirmedAt": "2026-10-01T15:02:11+07:00",
+  "cashierId": "C101",
+  "openedAt": "2026-10-01T07:00:00+07:00",
+  "closedAt": "2026-10-01T15:02:11+07:00",
+  "transactionCount": 30,
+  "currency": "THB",
+  "totalAmount": "1500.00",
+  "cashExpected": "1500.00",
+  "cashCounted": "1500.00",
+  "posSystemVersion": "added-by-a-newer-producer",
+  "lines": [
+    { "tenderType": "CASH", "amount": "1500.00", "quantity": 30, "note": "unknown fields must be ignored" }
+  ]
+}

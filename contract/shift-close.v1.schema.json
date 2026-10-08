@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mpiumakkho/branch-sales-consumer/contract/shift-close.v1.schema.json",
+  "title": "ShiftClose",
+  "description": "Shift close (Z-report) of one POS terminal of one branch, broken down by tender type. One message per (branchCode, businessDate, terminalId, shiftNo, revision). HQ stores it whether or not it holds the branch's DailySalesSummary of the same date.",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "eventId",
+    "branchCode",
+    "businessDate",
+    "terminalId",
+    "shiftNo",
+    "revision",
+    "confirmedAt",
+    "openedAt",
+    "closedAt",
+    "transactionCount",
+    "currency",
+    "totalAmount",
+    "cashExpected",
+    "cashCounted",
+    "lines"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "eventId": {
+      "description": "Unique per message. Used for tracing, not for deduplication.",
+      "type": "string",
+      "format": "uuid"
+    },
+    "branchCode": {
+      "description": "Must exist in the HQ branch registry.",
+      "type": "string",
+      "pattern": "^[A-Z0-9]{3,10}$"
+    },
+    "businessDate": {
+      "description": "Back-office business date the shift was opened under, Asia/Bangkok local time. A night shift that closes after midnight keeps this date. HQ never derives it from openedAt or closedAt.",
+      "type": "string",
+      "format": "date"
+    },
+    "terminalId": {
+      "description": "POS terminal the shift ran on, unique within the branch.",
+      "type": "string",
+      "pattern": "^[A-Z0-9_-]{1,20}$"
+    },
+    "shiftNo": {
+      "description": "Shift number on the terminal, restarting at 1 each business date. Reopening and closing a shift again keeps its shiftNo and increases revision.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "revision": {
+      "description": "Starts at 1 and increases by 1 each time the shift is closed again after a reopen.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "confirmedAt": {
+      "description": "Time the shift was closed (the Z-report time), equal to closedAt.",
+      "type": "string",
+      "format": "date-time"
+    },
+    "cashierId": {
+      "description": "POS login id of the cashier, stored as sent. Not checked against a master.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{1,30}$"
+    },
+    "openedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "closedAt": {
+      "description": "Must not be before openedAt.",
+      "type": "string",
+      "format": "date-time"
+    },
+    "transactionCount": {
+      "description": "Number of sale transactions rung in the shift, voided transactions excluded.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "currency": {
+      "const": "THB"
+    },
+    "totalAmount": {
+      "description": "Must equal the sum of lines[].amount.",
+      "$ref": "#/$defs/money"
+    },
+    "cashExpected": {
+      "description": "Cash the drawer should hold at close as computed by the POS: opening float plus cash sales minus cash paid out.",
+      "$ref": "#/$defs/money"
+    },
+    "cashCounted": {
+      "description": "Cash counted in the drawer at close. HQ derives over/short as cashCounted - cashExpected.",
+      "$ref": "#/$defs/money"
+    },
+    "lines": {
+      "description": "tenderType must be unique within one message. Empty for a shift with no transactions.",
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 20,
+      "items": {
+        "$ref": "#/$defs/line"
+      }
+    }
+  },
+  "$defs": {
+    "money": {
+      "description": "Non-negative decimal string with exactly 2 decimal places. Parse as BigDecimal, never as floating point.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,11})\\.[0-9]{2}$"
+    },
+    "line": {
+      "type": "object",
+      "required": ["tenderType", "amount", "quantity"],
+      "additionalProperties": true,
+      "properties": {
+        "tenderType": {
+          "description": "HQ standard tender type. Must exist in the HQ tender type master. See tender-types.md.",
+          "type": "string",
+          "pattern": "^[A-Z_]{2,30}$"
+        },
+        "amount": {
+          "$ref": "#/$defs/money"
+        },
+        "quantity": {
+          "description": "Number of payments made with this tender type.",
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}
