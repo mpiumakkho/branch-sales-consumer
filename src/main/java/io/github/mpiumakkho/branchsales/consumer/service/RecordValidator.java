@@ -32,6 +32,10 @@ import tools.jackson.databind.json.JsonMapper;
 
 import io.github.mpiumakkho.branchsales.consumer.dto.DailyFigures;
 import io.github.mpiumakkho.branchsales.consumer.dto.DailyFigures.Line;
+import io.github.mpiumakkho.branchsales.consumer.dto.DailyFigures.ShiftDetail;
+import io.github.mpiumakkho.branchsales.consumer.dto.RecordKey;
+import io.github.mpiumakkho.branchsales.consumer.dto.RecordKey.DayKey;
+import io.github.mpiumakkho.branchsales.consumer.dto.RecordKey.ShiftKey;
 import io.github.mpiumakkho.branchsales.consumer.dto.RecordType;
 import io.github.mpiumakkho.branchsales.consumer.exception.RejectReason;
 import io.github.mpiumakkho.branchsales.consumer.exception.RejectedMessageException;
@@ -86,7 +90,8 @@ public class RecordValidator {
 		DailyFigures figures = toFigures(type, root);
 		checkIdentity(figures, branchCode, key);
 		checkTotal(figures);
-		checkUniqueCategories(figures);
+		checkUniqueLineCodes(figures);
+		checkShiftTimes(figures);
 		return figures;
 	}
 
@@ -119,10 +124,11 @@ public class RecordValidator {
 	// Called only after the schema check, so required fields are present and have the right JSON types.
 	private DailyFigures toFigures(RecordType type, JsonNode root) {
 		try {
+			String codeField = type.lineShape().codeField();
 			List<Line> lines = new ArrayList<>();
 			for (JsonNode line : root.get("lines")) {
 				lines.add(new Line(
-						line.get("categoryCode").asString(),
+						line.get(codeField).asString(),
 						new BigDecimal(line.get("amount").asString()),
 						exactLong(line.get("quantity"), "quantity")));
 			}
@@ -130,16 +136,36 @@ public class RecordValidator {
 					type,
 					UUID.fromString(root.get("eventId").asString()),
 					root.get("branchCode").asString(),
-					LocalDate.parse(root.get(type.dateField()).asString()),
+					toKey(type, root),
 					exactInt(root.get("revision"), "revision"),
 					OffsetDateTime.parse(root.get("confirmedAt").asString()),
 					new BigDecimal(root.get("totalAmount").asString()),
-					lines);
+					lines,
+					type.keyShape().kind() == RecordType.KeyShape.Kind.SHIFT ? toShiftDetail(root) : null);
 		}
 		catch (DateTimeParseException | IllegalArgumentException | ArithmeticException e) {
 			// Valid by the schema but not representable in HQ types (e.g. a revision above Integer.MAX_VALUE)
 			throw new RejectedMessageException(RejectReason.SCHEMA_INVALID, "value cannot be stored: " + e.getMessage());
 		}
+	}
+
+	private static RecordKey toKey(RecordType type, JsonNode root) {
+		LocalDate date = LocalDate.parse(root.get(type.dateField()).asString());
+		return switch (type.keyShape().kind()) {
+			case DAY -> new DayKey(date);
+			case SHIFT -> new ShiftKey(date, root.get("terminalId").asString(), exactInt(root.get("shiftNo"), "shiftNo"));
+		};
+	}
+
+	private static ShiftDetail toShiftDetail(JsonNode root) {
+		JsonNode cashierId = root.get("cashierId");
+		return new ShiftDetail(
+				cashierId == null ? null : cashierId.asString(),
+				OffsetDateTime.parse(root.get("openedAt").asString()),
+				OffsetDateTime.parse(root.get("closedAt").asString()),
+				exactLong(root.get("transactionCount"), "transactionCount"),
+				new BigDecimal(root.get("cashExpected").asString()),
+				new BigDecimal(root.get("cashCounted").asString()));
 	}
 
 	private static int exactInt(JsonNode node, String field) {
@@ -182,17 +208,26 @@ public class RecordValidator {
 		}
 	}
 
-	private static void checkUniqueCategories(DailyFigures figures) {
+	private static void checkUniqueLineCodes(DailyFigures figures) {
 		Set<String> seen = new HashSet<>();
 		Set<String> duplicates = new TreeSet<>();
 		for (Line line : figures.lines()) {
-			if (!seen.add(line.categoryCode())) {
-				duplicates.add(line.categoryCode());
+			if (!seen.add(line.code())) {
+				duplicates.add(line.code());
 			}
 		}
 		if (!duplicates.isEmpty()) {
-			throw new RejectedMessageException(RejectReason.DUPLICATE_CATEGORY, "repeated categoryCode " + duplicates,
+			RecordType.LineShape shape = figures.type().lineShape();
+			throw new RejectedMessageException(shape.duplicateReason(), "repeated " + shape.codeField() + " " + duplicates,
 					figures);
+		}
+	}
+
+	private static void checkShiftTimes(DailyFigures figures) {
+		ShiftDetail shift = figures.shift();
+		if (shift != null && shift.closedAt().isBefore(shift.openedAt())) {
+			throw new RejectedMessageException(RejectReason.SHIFT_TIMES_INVALID,
+					"closedAt " + shift.closedAt() + " is before openedAt " + shift.openedAt(), figures);
 		}
 	}
 }

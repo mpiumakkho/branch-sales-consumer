@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -28,13 +29,14 @@ import org.testcontainers.kafka.KafkaContainer;
 import tools.jackson.databind.JsonNode;
 
 /**
- * One test branch: its Kafka broker with the two contract topics, a producer acting as the branch producer, and a
+ * One test branch: its Kafka broker with the contract topics, a producer acting as the branch producer, and a
  * reader for the receipts HQ writes back. The receipt reader starts at the end of the topic when the branch is opened.
  */
 public final class TestBranch implements AutoCloseable {
 
 	public static final String SUMMARY_TOPIC = "branch-sales.daily-summary";
 	public static final String RETURN_TOPIC = "branch-sales.daily-return";
+	public static final String SHIFT_TOPIC = "branch-sales.shift-close";
 	public static final String RECEIPT_TOPIC = "branch-sales.receipt";
 
 	private static final Duration TIMEOUT = Duration.ofSeconds(30);
@@ -44,10 +46,10 @@ public final class TestBranch implements AutoCloseable {
 	private final KafkaProducer<String, byte[]> producer;
 	private final KafkaConsumer<String, byte[]> receiptReader;
 
-	private TestBranch(String code, KafkaContainer kafka) {
+	private TestBranch(String code, KafkaContainer kafka, Set<String> topics) {
 		this.code = code;
 		this.kafka = kafka;
-		createTopics();
+		topics.forEach(this::createTopic);
 		this.producer = new KafkaProducer<>(Map.of(
 				ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, kafka.getBootstrapServers(),
 				ProducerConfig.ACKS_CONFIG, "all"),
@@ -63,7 +65,17 @@ public final class TestBranch implements AutoCloseable {
 	}
 
 	public static TestBranch open(String code, KafkaContainer kafka) {
-		return new TestBranch(code, kafka);
+		return new TestBranch(code, kafka, Set.of(SUMMARY_TOPIC, RETURN_TOPIC, SHIFT_TOPIC, RECEIPT_TOPIC));
+	}
+
+	/**
+	 * A branch whose Kafka has every topic except {@code missingTopic}, like a branch not yet upgraded. Needs a broker
+	 * where that topic was never created; {@link #createTopic} adds it later.
+	 */
+	public static TestBranch openWithout(String code, KafkaContainer kafka, String missingTopic) {
+		Set<String> topics = new HashSet<>(Set.of(SUMMARY_TOPIC, RETURN_TOPIC, SHIFT_TOPIC, RECEIPT_TOPIC));
+		topics.remove(missingTopic);
+		return new TestBranch(code, kafka, topics);
 	}
 
 	public String code() {
@@ -101,6 +113,11 @@ public final class TestBranch implements AutoCloseable {
 		return send(RETURN_TOPIC, ContractExamples.branchCodeOf(value), value);
 	}
 
+	/** Sends a shift close as the branch producer would. @return the record's offset in the shift close topic */
+	public long sendShiftClose(byte[] value) {
+		return send(SHIFT_TOPIC, ContractExamples.branchCodeOf(value), value);
+	}
+
 	/** @return the record's offset in that topic */
 	public long send(String topic, String key, byte[] value) {
 		try {
@@ -133,16 +150,15 @@ public final class TestBranch implements AutoCloseable {
 		return receipts;
 	}
 
-	private void createTopics() {
+	/** Creates the topic with one partition, as the branch's kafka-init does; an existing topic is kept. */
+	public void createTopic(String topic) {
 		try (Admin admin = Admin.create(Map.of(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, kafka.getBootstrapServers()))) {
-			for (String topic : Set.of(SUMMARY_TOPIC, RETURN_TOPIC, RECEIPT_TOPIC)) {
-				try {
-					admin.createTopics(List.of(new NewTopic(topic, 1, (short) 1))).all().get();
-				}
-				catch (ExecutionException e) {
-					if (!(e.getCause() instanceof TopicExistsException)) {
-						throw new IllegalStateException(e);
-					}
+			try {
+				admin.createTopics(List.of(new NewTopic(topic, 1, (short) 1))).all().get();
+			}
+			catch (ExecutionException e) {
+				if (!(e.getCause() instanceof TopicExistsException)) {
+					throw new IllegalStateException(e);
 				}
 			}
 		}

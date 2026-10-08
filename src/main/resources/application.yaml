@@ -47,9 +47,10 @@ management:
 
 branch-sales:
   branch-kafka:
-    # Both topics exist in every branch cluster (contract/README.md)
+    # All record topics exist in every upgraded branch cluster (contract/README.md); older clusters are read partially
     summary-topic: branch-sales.daily-summary
     return-topic: branch-sales.daily-return
+    shift-close-topic: branch-sales.shift-close
     receipt-topic: branch-sales.receipt
     group-id: hq-branch-sales-consumer
     security-protocol: ${BRANCH_KAFKA_SECURITY_PROTOCOL:SASL_SSL}

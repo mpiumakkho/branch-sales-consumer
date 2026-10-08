@@ -15,7 +15,7 @@ import io.github.mpiumakkho.branchsales.consumer.exception.RejectReason;
 import io.github.mpiumakkho.branchsales.consumer.exception.RejectedMessageException;
 
 /**
- * Rejected summary records (table dead_letter), kept unchanged so they can be inspected and replayed.
+ * Rejected records of every type (table dead_letter), kept unchanged so they can be inspected and replayed.
  */
 @Repository
 public class DeadLetterStore {

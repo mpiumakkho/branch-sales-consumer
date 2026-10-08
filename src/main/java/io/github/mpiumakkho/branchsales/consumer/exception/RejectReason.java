@@ -14,5 +14,9 @@ public enum RejectReason {
 	UNKNOWN_BRANCH,
 	UNKNOWN_CATEGORY,
 	/** A return whose daily sales of the same date are not at HQ yet. Replayed automatically when they arrive. */
-	PARENT_MISSING
+	PARENT_MISSING,
+	DUPLICATE_TENDER,
+	UNKNOWN_TENDER,
+	/** A shift close whose closedAt is before its openedAt. */
+	SHIFT_TIMES_INVALID
 }

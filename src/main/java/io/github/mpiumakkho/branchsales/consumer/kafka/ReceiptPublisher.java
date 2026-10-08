@@ -88,6 +88,12 @@ public class ReceiptPublisher {
 		if (receipt.saleDate() != null) {
 			root.put("saleDate", receipt.saleDate().toString());
 		}
+		if (receipt.terminalId() != null) {
+			root.put("terminalId", receipt.terminalId());
+		}
+		if (receipt.shiftNo() != null) {
+			root.put("shiftNo", receipt.shiftNo());
+		}
 		if (receipt.revision() != null) {
 			root.put("revision", receipt.revision());
 		}

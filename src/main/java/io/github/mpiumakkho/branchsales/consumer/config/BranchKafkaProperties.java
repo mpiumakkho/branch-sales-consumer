@@ -2,6 +2,8 @@ package io.github.mpiumakkho.branchsales.consumer.config;
 
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.regex.Pattern;
 
@@ -16,6 +18,7 @@ import io.github.mpiumakkho.branchsales.consumer.dto.RecordType;
  *
  * @param summaryTopic     topic the branch producer writes daily sales to, in every branch cluster
  * @param returnTopic      topic the branch producer writes daily returns to, in every branch cluster
+ * @param shiftCloseTopic  topic the branch producer writes POS shift closes to, in every branch cluster
  * @param receiptTopic     topic HQ writes receipts to, in every branch cluster
  * @param groupId          HQ consumer group in every branch cluster
  * @param securityProtocol SASL_SSL (branches over the WAN) or PLAINTEXT (tests)
@@ -30,6 +33,7 @@ import io.github.mpiumakkho.branchsales.consumer.dto.RecordType;
 public record BranchKafkaProperties(
 		String summaryTopic,
 		String returnTopic,
+		String shiftCloseTopic,
 		String receiptTopic,
 		String groupId,
 		String securityProtocol,
@@ -54,14 +58,16 @@ public record BranchKafkaProperties(
 			throw new IllegalArgumentException(
 					"SASL_SSL needs branch-sales.branch-kafka.password-dir and branch-sales.branch-kafka.truststore");
 		}
-		if (summaryTopic.equals(returnTopic)) {
-			throw new IllegalArgumentException("branch-sales.branch-kafka.summary-topic and return-topic must differ");
+		// Not Set.of, which throws on duplicates itself
+		if (new HashSet<>(List.of(summaryTopic, returnTopic, shiftCloseTopic)).size() != 3) {
+			throw new IllegalArgumentException(
+					"branch-sales.branch-kafka.summary-topic, return-topic and shift-close-topic must differ");
 		}
 	}
 
 	/** The topics HQ reads in every branch cluster, one per record type. */
 	public String[] recordTopics() {
-		return new String[] { summaryTopic, returnTopic };
+		return new String[] { summaryTopic, returnTopic, shiftCloseTopic };
 	}
 
 	/** The record type of one of {@link #recordTopics()}. */
@@ -71,6 +77,9 @@ public record BranchKafkaProperties(
 		}
 		if (topic.equals(returnTopic)) {
 			return RecordType.DAILY_RETURN;
+		}
+		if (topic.equals(shiftCloseTopic)) {
+			return RecordType.SHIFT_CLOSE;
 		}
 		throw new IllegalArgumentException("not a record topic: " + topic);
 	}

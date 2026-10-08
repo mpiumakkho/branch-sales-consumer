@@ -10,11 +10,15 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
-/** Reads the example messages in contract/examples (tests run with the project root as working directory). */
+/**
+ * Reads the example messages in contract/examples, contract/return-examples and contract/shift-close-examples (tests
+ * run with the project root as working directory).
+ */
 public final class ContractExamples {
 
 	private static final Path ROOT = Path.of("contract", "examples");
 	private static final Path RETURN_ROOT = Path.of("contract", "return-examples");
+	private static final Path SHIFT_ROOT = Path.of("contract", "shift-close-examples");
 	private static final Pattern BRANCH_CODE = Pattern.compile("\"branchCode\"\\s*:\\s*\"([^\"]*)\"");
 
 	/** The branchCode in a message value, or BR0001 if there is none (e.g. not JSON): the branch a producer would send it as. */
@@ -46,6 +50,16 @@ public final class ContractExamples {
 		}
 	}
 
+	/** @param name path under contract/shift-close-examples, e.g. {@code valid/basic.json} */
+	public static byte[] readShift(String name) {
+		try {
+			return Files.readAllBytes(SHIFT_ROOT.resolve(name));
+		}
+		catch (IOException e) {
+			throw new UncheckedIOException(e);
+		}
+	}
+
 	/** Every example file, as paths relative to contract/examples with forward slashes. */
 	public static List<String> all() {
 		return all(ROOT);
@@ -54,6 +68,11 @@ public final class ContractExamples {
 	/** Every return example file, as paths relative to contract/return-examples with forward slashes. */
 	public static List<String> allReturns() {
 		return all(RETURN_ROOT);
+	}
+
+	/** Every shift close example file, as paths relative to contract/shift-close-examples with forward slashes. */
+	public static List<String> allShifts() {
+		return all(SHIFT_ROOT);
 	}
 
 	private static List<String> all(Path root) {

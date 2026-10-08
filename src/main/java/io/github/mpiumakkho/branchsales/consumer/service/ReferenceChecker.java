@@ -14,8 +14,9 @@ import io.github.mpiumakkho.branchsales.consumer.exception.RejectReason;
 import io.github.mpiumakkho.branchsales.consumer.exception.RejectedMessageException;
 
 /**
- * Reference layer of the contract checks: branch and categories must exist in the HQ tables, and a return needs
- * the branch's daily sales of the same date (its parent) to be stored already.
+ * Reference layer of the contract checks: the branch and the line codes (categories, or tenders of a shift close)
+ * must exist in the HQ tables, and a return needs the branch's daily sales of the same date (its parent) to be
+ * stored already.
  */
 @Component
 public class ReferenceChecker {
@@ -27,8 +28,8 @@ public class ReferenceChecker {
 	}
 
 	/**
-	 * @throws RejectedMessageException with {@link RejectReason#UNKNOWN_BRANCH}, {@link RejectReason#UNKNOWN_CATEGORY}
-	 *                                  or {@link RejectReason#PARENT_MISSING}
+	 * @throws RejectedMessageException with {@link RejectReason#UNKNOWN_BRANCH}, the type's
+	 *                                  {@link RecordType.LineShape#unknownReason()} or {@link RejectReason#PARENT_MISSING}
 	 */
 	public void check(DailyFigures figures) {
 		boolean branchExists = jdbc.sql("select exists (select 1 from branch where branch_code = :code)")
@@ -40,15 +41,20 @@ public class ReferenceChecker {
 					"branchCode " + figures.branchCode() + " is not in the branch registry", figures);
 		}
 
-		Set<String> codes = figures.lines().stream().map(Line::categoryCode).collect(Collectors.toSet());
-		Set<String> unknown = new TreeSet<>(codes);
-		unknown.removeAll(jdbc.sql("select category_code from category where category_code in (:codes)")
-				.param("codes", codes)
-				.query(String.class)
-				.set());
-		if (!unknown.isEmpty()) {
-			throw new RejectedMessageException(RejectReason.UNKNOWN_CATEGORY,
-					"categoryCode " + unknown + " is not in the category table", figures);
+		RecordType.LineShape shape = figures.type().lineShape();
+		Set<String> codes = figures.lines().stream().map(Line::code).collect(Collectors.toSet());
+		if (!codes.isEmpty()) {
+			Set<String> unknown = new TreeSet<>(codes);
+			// Table and column names come from the RecordType enum, not from input
+			unknown.removeAll(jdbc.sql("select %1$s from %2$s where %1$s in (:codes)"
+					.formatted(shape.codeColumn(), shape.referenceTable()))
+					.param("codes", codes)
+					.query(String.class)
+					.set());
+			if (!unknown.isEmpty()) {
+				throw new RejectedMessageException(shape.unknownReason(),
+						shape.codeField() + " " + unknown + " is not in the " + shape.referenceTable() + " table", figures);
+			}
 		}
 
 		if (figures.type() == RecordType.DAILY_RETURN) {

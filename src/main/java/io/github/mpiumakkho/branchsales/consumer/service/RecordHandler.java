@@ -45,12 +45,12 @@ public class RecordHandler {
 			var result = processed.result();
 			if (result.outcome() == Outcome.STALE) {
 				log.warn("{} {} {}/{} revision {} skipped: stored revision {} is newer (offset {})", result.outcome(),
-						type, figures.branchCode(), figures.date(), figures.revision(), result.storedRevision(),
+						type, figures.branchCode(), figures.key().text(), figures.revision(), result.storedRevision(),
 						sourceOffset);
 			}
 			else {
 				log.info("{} {} {}/{} revision {} (offset {})", result.outcome(), type, figures.branchCode(),
-						figures.date(), figures.revision(), sourceOffset);
+						figures.key().text(), figures.revision(), sourceOffset);
 			}
 			return Receipt.stored(type, branchCode, sourceOffset, figures, result, OffsetDateTime.now());
 		}
