@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/mpiumakkho/branch-sales-consumer/contract/daily-sales-receipt.v1.schema.json",
   "title": "DailySalesReceipt",
-  "description": "What HQ did with one DailySalesSummary record. Written by HQ to the branch's receipt topic, one receipt per summary record (a replayed dead letter gets another receipt for the same record).",
+  "description": "What HQ did with one record of the branch (a DailySalesSummary or a DailyReturn). Written by HQ to the branch's receipt topic, one receipt per record (a replayed dead letter gets another receipt for the same record).",
   "type": "object",
   "required": [
     "schemaVersion",
@@ -16,28 +16,33 @@
     "schemaVersion": {
       "const": 1
     },
+    "type": {
+      "description": "Which record the receipt is for: the topic it was read from. Absent means DAILY_SUMMARY (receipts written before the return topic existed).",
+      "enum": ["DAILY_SUMMARY", "DAILY_RETURN"],
+      "default": "DAILY_SUMMARY"
+    },
     "branchCode": {
-      "description": "The branch whose cluster the summary was read from.",
+      "description": "The branch whose cluster the record was read from.",
       "type": "string",
       "pattern": "^[A-Z0-9]{3,10}$"
     },
     "sourceOffset": {
-      "description": "Offset of the summary record in branch-sales.daily-summary (one partition). Always present, also for records that are not valid JSON.",
+      "description": "Offset of the record in the topic of its type (one partition each): branch-sales.daily-summary or branch-sales.daily-return. Always present, also for records that are not valid JSON. Match receipts by (type, sourceOffset).",
       "type": "integer",
       "minimum": 0
     },
     "eventId": {
-      "description": "eventId of the summary, when it could be read.",
+      "description": "eventId of the record, when it could be read.",
       "type": "string",
       "format": "uuid"
     },
     "saleDate": {
-      "description": "saleDate of the summary, when it could be read.",
+      "description": "Business date of the record (saleDate of a summary, returnDate of a return), when it could be read.",
       "type": "string",
       "format": "date"
     },
     "revision": {
-      "description": "revision of the summary, when it could be read.",
+      "description": "revision of the record, when it could be read.",
       "type": "integer",
       "minimum": 1
     },
@@ -46,7 +51,7 @@
       "enum": ["INSERTED", "UPDATED", "DUPLICATE", "STALE", "REJECTED"]
     },
     "storedRevision": {
-      "description": "Revision HQ holds for (branchCode, saleDate) after this record. Present unless outcome is REJECTED.",
+      "description": "Revision HQ holds for (type, branchCode, saleDate) after this record. Present unless outcome is REJECTED.",
       "type": "integer",
       "minimum": 1
     },
@@ -60,7 +65,8 @@
         "TOTAL_MISMATCH",
         "DUPLICATE_CATEGORY",
         "UNKNOWN_BRANCH",
-        "UNKNOWN_CATEGORY"
+        "UNKNOWN_CATEGORY",
+        "PARENT_MISSING"
       ]
     },
     "detail": {

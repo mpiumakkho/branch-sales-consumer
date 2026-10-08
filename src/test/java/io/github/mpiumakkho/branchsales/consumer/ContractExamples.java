@@ -14,6 +14,7 @@ import java.util.stream.Stream;
 public final class ContractExamples {
 
 	private static final Path ROOT = Path.of("contract", "examples");
+	private static final Path RETURN_ROOT = Path.of("contract", "return-examples");
 	private static final Pattern BRANCH_CODE = Pattern.compile("\"branchCode\"\\s*:\\s*\"([^\"]*)\"");
 
 	/** The branchCode in a message value, or BR0001 if there is none (e.g. not JSON): the branch a producer would send it as. */
@@ -29,6 +30,16 @@ public final class ContractExamples {
 	public static byte[] read(String name) {
 		try {
 			return Files.readAllBytes(ROOT.resolve(name));
+		}
+		catch (IOException e) {
+			throw new UncheckedIOException(e);
+		}
+	}
+
+	/** @param name path under contract/return-examples, e.g. {@code valid/basic.json} */
+	public static byte[] readReturn(String name) {
+		try {
+			return Files.readAllBytes(RETURN_ROOT.resolve(name));
 		}
 		catch (IOException e) {
 			throw new UncheckedIOException(e);

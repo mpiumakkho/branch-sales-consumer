@@ -13,8 +13,9 @@ import tools.jackson.databind.node.ObjectNode;
 
 import io.github.mpiumakkho.branchsales.consumer.config.BranchKafkaProperties;
 import io.github.mpiumakkho.branchsales.consumer.dto.Receipt;
+import io.github.mpiumakkho.branchsales.consumer.dto.RecordType;
 import io.github.mpiumakkho.branchsales.consumer.exception.RejectReason;
-import io.github.mpiumakkho.branchsales.consumer.repository.DailySalesStore.Outcome;
+import io.github.mpiumakkho.branchsales.consumer.repository.DailyFiguresStore.Outcome;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 
@@ -39,11 +40,13 @@ public class ReceiptPublisher {
 		this.properties = properties;
 		this.meters = meters;
 		// Registered up front, so every series exists from the first scrape and rate() works from the first event
-		for (Outcome outcome : Outcome.values()) {
-			counter(outcome.name(), NO_REASON);
-		}
-		for (RejectReason reason : RejectReason.values()) {
-			counter(Receipt.REJECTED, reason.name());
+		for (RecordType type : RecordType.values()) {
+			for (Outcome outcome : Outcome.values()) {
+				counter(type, outcome.name(), NO_REASON);
+			}
+			for (RejectReason reason : RejectReason.values()) {
+				counter(type, Receipt.REJECTED, reason.name());
+			}
 		}
 	}
 
@@ -60,13 +63,14 @@ public class ReceiptPublisher {
 		catch (ExecutionException | TimeoutException | RuntimeException e) {
 			throw new ReceiptNotSentException(receipt, e);
 		}
-		counter(receipt.outcome(), receipt.rejectReason() == null ? NO_REASON : receipt.rejectReason().name())
-				.increment();
+		counter(receipt.type(), receipt.outcome(),
+				receipt.rejectReason() == null ? NO_REASON : receipt.rejectReason().name()).increment();
 	}
 
-	private Counter counter(String outcome, String reason) {
+	private Counter counter(RecordType type, String outcome, String reason) {
 		return Counter.builder("branch_sales.receipts")
-				.description("Receipts acknowledged by the branch, by outcome and reject reason")
+				.description("Receipts acknowledged by the branch, by record type, outcome and reject reason")
+				.tag("type", type.name())
 				.tag("outcome", outcome)
 				.tag("reason", reason)
 				.register(meters);
@@ -75,6 +79,7 @@ public class ReceiptPublisher {
 	byte[] toJson(Receipt receipt) {
 		ObjectNode root = mapper.createObjectNode();
 		root.put("schemaVersion", 1);
+		root.put("type", receipt.type().name());
 		root.put("branchCode", receipt.branchCode());
 		root.put("sourceOffset", receipt.sourceOffset());
 		if (receipt.eventId() != null) {

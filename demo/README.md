@@ -82,7 +82,7 @@ cp branch-sales-producer/.env.example branch-sales-producer/.env
 (cd branch-sales-producer && HQ_KAFKA_PASSWORD=pw-hq-at-br0002 ./smoke-test.sh BR0002 ../branch-sales-consumer/infra/tls/out/ca.crt)
 ```
 
-Each branch's `kafka-init` creates the two topics, user `hq` and its ACLs, then exits. The smoke test connects from `wan` as HQ does (TLS with the HQ CA, host name checked, SCRAM) and checks that nothing but the edge's port 9094 is reachable. Within a minute, `docker logs hq-consumer` shows `Connected to branch BR0001 at kafka.br0001.example:9094` and the same for BR0002.
+Each branch's `kafka-init` creates the three topics (sales, returns, receipts), user `hq` and its ACLs, then exits. The smoke test connects from `wan` as HQ does (TLS with the HQ CA, host name checked, SCRAM) and checks that nothing but the edge's port 9094 is reachable. Within a minute, `docker logs hq-consumer` shows `Connected to branch BR0001 at kafka.br0001.example:9094` and the same for BR0002.
 
 ## 3. Scenarios
 
@@ -181,7 +181,28 @@ Within 30 s the consumer replays it (`docker logs hq-consumer`: `Replayed dead l
 
 Messages that fail other contract checks (not JSON, schema, totals, wrong branch code) take the same path; the consumer tests send every example in `contract/examples/` through it.
 
-### 3.5 Branch offline
+### 3.5 Returns of a day, before and after its sales
+
+```bash
+branch-sales-producer/demo-branches/sql.sh BR0001 branch-sales-producer/demo-branches/BR0001/05-returns.sql
+```
+
+The manager confirms the returns of two days. They go to the branch's second topic, `branch-sales.daily-return`. HQ stores a day's returns only when it has that day's sales: 2026-10-02 is there (3.1), so its returns are stored right away; 2026-10-05 has no sales yet, so HQ keeps those returns in `dead_letter` and tells the branch why (`sync-state.sh BR0001`):
+
+```
+RETURN 2026-10-02  r1  HQ_ACCEPTED  attempts=1  offsets=0  INSERTED stored revision 1
+RETURN 2026-10-05  r1  HQ_REJECTED  attempts=1  offsets=1  PARENT_MISSING: no daily sales of BR0001 for 2026-10-05 at HQ yet; replayed when they arrive
+```
+
+Offsets start at 0 again: they are per topic, and the receipt's `type` tells the branch which one. Nothing to do at either side: the sales of 2026-10-05 are confirmed later,
+
+```bash
+branch-sales-producer/demo-branches/sql.sh BR0001 branch-sales-producer/demo-branches/BR0001/06-sales-after-returns.sql
+```
+
+and when HQ stores them it asks for the waiting returns itself (`docker logs hq-consumer`: `Replayed dead letter 2 (DAILY_RETURN BR0001 offset 1): INSERTED`). The branch gets a second receipt and shows `HQ_ACCEPTED` for the returns; `hq-status.sql` lists `SALES` and `RETURN` rows for 2026-10-05.
+
+### 3.6 Branch offline
 
 Cut BR0002 off from the WAN by stopping its edge, then confirm a day:
 
@@ -204,7 +225,7 @@ Reconnect:
 
 HQ's client for BR0002 finds the broker again, reads the waiting record and answers; the branch shows `HQ_ACCEPTED`. Nothing was sent twice: the record waited in the branch's Kafka. If the branch's broker had lost it (a `SENT` day without a receipt after `SEND_RESEND_AFTER`, 24 hours by default), the producer would send it again, and HQ would answer `DUPLICATE` if it had stored it after all.
 
-### 3.6 Offboard and onboard a branch
+### 3.7 Offboard and onboard a branch
 
 HQ stops reading BR0001 (for example, HQ's password at that branch leaked), and BR0001 confirms a day meanwhile:
 

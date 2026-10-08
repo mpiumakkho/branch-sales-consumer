@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "type": "DAILY_RETURN",
+  "branchCode": "BR0001",
+  "sourceOffset": 0,
+  "eventId": "7b2d9c40-5e1f-4a8b-9c3d-2f6e8a1b4c5d",
+  "saleDate": "2026-10-01",
+  "revision": 1,
+  "outcome": "INSERTED",
+  "storedRevision": 1,
+  "processedAt": "2026-10-02T09:15:05.300+07:00"
+}

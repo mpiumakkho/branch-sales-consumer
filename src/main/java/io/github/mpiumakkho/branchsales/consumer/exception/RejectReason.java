@@ -12,5 +12,7 @@ public enum RejectReason {
 	TOTAL_MISMATCH,
 	DUPLICATE_CATEGORY,
 	UNKNOWN_BRANCH,
-	UNKNOWN_CATEGORY
+	UNKNOWN_CATEGORY,
+	/** A return whose daily sales of the same date are not at HQ yet. Replayed automatically when they arrive. */
+	PARENT_MISSING
 }

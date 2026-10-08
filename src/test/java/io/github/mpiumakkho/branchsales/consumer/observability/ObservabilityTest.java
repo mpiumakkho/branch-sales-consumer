@@ -107,8 +107,8 @@ class ObservabilityTest {
 		await().atMost(TIMEOUT).untilAsserted(() -> {
 			List<String> lines = prometheus();
 			assertThat(lines).contains(
-					"branch_sales_receipts_total{outcome=\"INSERTED\",reason=\"none\"} 1.0",
-					"branch_sales_receipts_total{outcome=\"REJECTED\",reason=\"UNKNOWN_CATEGORY\"} 0.0",
+					"branch_sales_receipts_total{outcome=\"INSERTED\",reason=\"none\",type=\"DAILY_SUMMARY\"} 1.0",
+					"branch_sales_receipts_total{outcome=\"REJECTED\",reason=\"PARENT_MISSING\",type=\"DAILY_RETURN\"} 0.0",
 					"branch_sales_branches_connected 1.0",
 					"branch_sales_branches_unreachable 1.0",
 					"branch_sales_branches_registered 2.0",

@@ -14,7 +14,7 @@ import io.github.mpiumakkho.branchsales.consumer.kafka.ReceiptPublisher;
 import io.github.mpiumakkho.branchsales.consumer.listener.BranchListeners;
 import io.github.mpiumakkho.branchsales.consumer.repository.DeadLetterStore;
 import io.github.mpiumakkho.branchsales.consumer.repository.DeadLetterStore.DeadLetter;
-import io.github.mpiumakkho.branchsales.consumer.service.DailySummaryProcessor;
+import io.github.mpiumakkho.branchsales.consumer.service.RecordProcessor;
 
 /**
  * Processes dead letters again when an HQ admin asks for it ({@code update dead_letter set replay_requested_at = now()
@@ -34,11 +34,11 @@ public class DeadLetterReplayer {
 	private static final int BATCH_SIZE = 100;
 
 	private final DeadLetterStore deadLetters;
-	private final DailySummaryProcessor processor;
+	private final RecordProcessor processor;
 	private final BranchListeners branches;
 	private final ReceiptPublisher receipts;
 
-	public DeadLetterReplayer(DeadLetterStore deadLetters, DailySummaryProcessor processor, BranchListeners branches,
+	public DeadLetterReplayer(DeadLetterStore deadLetters, RecordProcessor processor, BranchListeners branches,
 			ReceiptPublisher receipts) {
 		this.deadLetters = deadLetters;
 		this.processor = processor;
@@ -69,15 +69,16 @@ public class DeadLetterReplayer {
 		String branchCode = deadLetter.branchCode();
 		long offset = deadLetter.sourceOffset();
 		try {
-			var processed = processor.process(branchCode, deadLetter.recordKey(), deadLetter.recordValue());
-			receipts.publish(branchKafka,
-					Receipt.stored(branchCode, offset, processed.summary(), processed.result(), OffsetDateTime.now()));
+			var processed = processor.process(deadLetter.type(), branchCode, deadLetter.recordKey(),
+					deadLetter.recordValue());
+			receipts.publish(branchKafka, Receipt.stored(deadLetter.type(), branchCode, offset, processed.figures(),
+					processed.result(), OffsetDateTime.now()));
 			deadLetters.markReplayed(deadLetter.id(), processed.result().outcome().name());
-			log.info("Replayed dead letter {} ({} offset {}): {}", deadLetter.id(), branchCode, offset,
-					processed.result().outcome());
+			log.info("Replayed dead letter {} ({} {} offset {}): {}", deadLetter.id(), deadLetter.type(), branchCode,
+					offset, processed.result().outcome());
 		}
 		catch (RejectedMessageException e) {
-			receipts.publish(branchKafka, Receipt.rejected(branchCode, offset, e, OffsetDateTime.now()));
+			receipts.publish(branchKafka, Receipt.rejected(deadLetter.type(), branchCode, offset, e, OffsetDateTime.now()));
 			deadLetters.markReplayRejected(deadLetter.id(), e);
 			log.warn("Replayed dead letter {} ({} offset {}) rejected again: {}", deadLetter.id(), branchCode, offset,
 					e.getMessage());

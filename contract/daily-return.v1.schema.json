@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mpiumakkho/branch-sales-consumer/contract/daily-return.v1.schema.json",
+  "title": "DailyReturn",
+  "description": "Confirmed daily returns and voids of one branch, broken down by product category. One message per (branchCode, returnDate, revision). HQ stores it only when it holds the branch's DailySalesSummary of the same date (PARENT_MISSING otherwise, replayed automatically when that summary arrives).",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "eventId",
+    "branchCode",
+    "returnDate",
+    "revision",
+    "confirmedAt",
+    "currency",
+    "totalAmount",
+    "lines"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "eventId": {
+      "description": "Unique per message. Used for tracing, not for deduplication.",
+      "type": "string",
+      "format": "uuid"
+    },
+    "branchCode": {
+      "description": "Must exist in the HQ branch registry.",
+      "type": "string",
+      "pattern": "^[A-Z0-9]{3,10}$"
+    },
+    "returnDate": {
+      "description": "Business date the returns were processed on, Asia/Bangkok local time. The branch's DailySalesSummary of this date is the parent record.",
+      "type": "string",
+      "format": "date"
+    },
+    "revision": {
+      "description": "Starts at 1 and increases by 1 each time the branch re-confirms after an edit.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "confirmedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "currency": {
+      "const": "THB"
+    },
+    "totalAmount": {
+      "description": "Must equal the sum of lines[].amount.",
+      "$ref": "#/$defs/money"
+    },
+    "lines": {
+      "description": "categoryCode must be unique within one message.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 50,
+      "items": {
+        "$ref": "#/$defs/line"
+      }
+    }
+  },
+  "$defs": {
+    "money": {
+      "description": "Non-negative decimal string with exactly 2 decimal places. Parse as BigDecimal, never as floating point.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,11})\\.[0-9]{2}$"
+    },
+    "line": {
+      "type": "object",
+      "required": ["categoryCode", "amount", "quantity"],
+      "additionalProperties": true,
+      "properties": {
+        "categoryCode": {
+          "description": "HQ standard category code. Must exist in the HQ category master. See categories.md.",
+          "type": "string",
+          "pattern": "^[A-Z_]{2,30}$"
+        },
+        "amount": {
+          "$ref": "#/$defs/money"
+        },
+        "quantity": {
+          "description": "Number of items returned in this category.",
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

@@ -9,10 +9,13 @@ import org.jspecify.annotations.Nullable;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.DefaultValue;
 
+import io.github.mpiumakkho.branchsales.consumer.dto.RecordType;
+
 /**
  * How HQ connects to the Kafka broker of each branch (requirements §16).
  *
- * @param summaryTopic     topic the branch producer writes, in every branch cluster
+ * @param summaryTopic     topic the branch producer writes daily sales to, in every branch cluster
+ * @param returnTopic      topic the branch producer writes daily returns to, in every branch cluster
  * @param receiptTopic     topic HQ writes receipts to, in every branch cluster
  * @param groupId          HQ consumer group in every branch cluster
  * @param securityProtocol SASL_SSL (branches over the WAN) or PLAINTEXT (tests)
@@ -26,6 +29,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
 @ConfigurationProperties("branch-sales.branch-kafka")
 public record BranchKafkaProperties(
 		String summaryTopic,
+		String returnTopic,
 		String receiptTopic,
 		String groupId,
 		String securityProtocol,
@@ -50,5 +54,24 @@ public record BranchKafkaProperties(
 			throw new IllegalArgumentException(
 					"SASL_SSL needs branch-sales.branch-kafka.password-dir and branch-sales.branch-kafka.truststore");
 		}
+		if (summaryTopic.equals(returnTopic)) {
+			throw new IllegalArgumentException("branch-sales.branch-kafka.summary-topic and return-topic must differ");
+		}
+	}
+
+	/** The topics HQ reads in every branch cluster, one per record type. */
+	public String[] recordTopics() {
+		return new String[] { summaryTopic, returnTopic };
+	}
+
+	/** The record type of one of {@link #recordTopics()}. */
+	public RecordType recordType(String topic) {
+		if (topic.equals(summaryTopic)) {
+			return RecordType.DAILY_SUMMARY;
+		}
+		if (topic.equals(returnTopic)) {
+			return RecordType.DAILY_RETURN;
+		}
+		throw new IllegalArgumentException("not a record topic: " + topic);
 	}
 }

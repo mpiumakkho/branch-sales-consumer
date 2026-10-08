@@ -62,7 +62,7 @@ Offboarding clears the branch's address in the registry (the consumer disconnect
 |---|---|
 | Address | `kafka.<branch code in lower case>.example:9094`, through the branch's edge |
 | Security | `SASL_SSL`: TLS with the branch broker certificate signed by the HQ CA, host name verified; SCRAM-SHA-512 user `hq`, re-login every 10 minutes |
-| ACLs (set by the branch) | Read + Describe `branch-sales.daily-summary`, Write + Describe `branch-sales.receipt`, Read group `hq-branch-sales-consumer` |
+| ACLs (set by the branch) | Read + Describe `branch-sales.daily-summary` and `branch-sales.daily-return`, Write + Describe `branch-sales.receipt`, Read group `hq-branch-sales-consumer` |
 
 ## Smoke test
 

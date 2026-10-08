@@ -34,6 +34,7 @@ import tools.jackson.databind.JsonNode;
 public final class TestBranch implements AutoCloseable {
 
 	public static final String SUMMARY_TOPIC = "branch-sales.daily-summary";
+	public static final String RETURN_TOPIC = "branch-sales.daily-return";
 	public static final String RECEIPT_TOPIC = "branch-sales.receipt";
 
 	private static final Duration TIMEOUT = Duration.ofSeconds(30);
@@ -92,8 +93,18 @@ public final class TestBranch implements AutoCloseable {
 
 	/** @return the record's offset in the summary topic */
 	public long send(String key, byte[] value) {
+		return send(SUMMARY_TOPIC, key, value);
+	}
+
+	/** Sends a return as the branch producer would. @return the record's offset in the return topic */
+	public long sendReturn(byte[] value) {
+		return send(RETURN_TOPIC, ContractExamples.branchCodeOf(value), value);
+	}
+
+	/** @return the record's offset in that topic */
+	public long send(String topic, String key, byte[] value) {
 		try {
-			return producer.send(new ProducerRecord<>(SUMMARY_TOPIC, key, value)).get().offset();
+			return producer.send(new ProducerRecord<>(topic, key, value)).get().offset();
 		}
 		catch (InterruptedException | ExecutionException e) {
 			throw new IllegalStateException(e);
@@ -124,7 +135,7 @@ public final class TestBranch implements AutoCloseable {
 
 	private void createTopics() {
 		try (Admin admin = Admin.create(Map.of(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, kafka.getBootstrapServers()))) {
-			for (String topic : Set.of(SUMMARY_TOPIC, RECEIPT_TOPIC)) {
+			for (String topic : Set.of(SUMMARY_TOPIC, RETURN_TOPIC, RECEIPT_TOPIC)) {
 				try {
 					admin.createTopics(List.of(new NewTopic(topic, 1, (short) 1))).all().get();
 				}

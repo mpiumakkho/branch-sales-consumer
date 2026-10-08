@@ -2,7 +2,7 @@ package io.github.mpiumakkho.branchsales.consumer.exception;
 
 import org.jspecify.annotations.Nullable;
 
-import io.github.mpiumakkho.branchsales.consumer.dto.DailySalesSummary;
+import io.github.mpiumakkho.branchsales.consumer.dto.DailyFigures;
 
 /**
  * A record that failed a contract check. It is not retried: it is stored in
@@ -13,25 +13,25 @@ public class RejectedMessageException extends RuntimeException {
 
 	private final RejectReason reason;
 
-	private final @Nullable DailySalesSummary summary;
+	private final @Nullable DailyFigures figures;
 
-	/** For records that could not be read as a summary (parse and schema layers). */
+	/** For records that could not be read (parse and schema layers). */
 	public RejectedMessageException(RejectReason reason, String detail) {
 		this(reason, detail, null);
 	}
 
 	/** For records that were read but failed a later layer; the receipt then names the day and revision. */
-	public RejectedMessageException(RejectReason reason, String detail, @Nullable DailySalesSummary summary) {
+	public RejectedMessageException(RejectReason reason, String detail, @Nullable DailyFigures figures) {
 		super(reason + ": " + detail);
 		this.reason = reason;
-		this.summary = summary;
+		this.figures = figures;
 	}
 
 	public RejectReason reason() {
 		return reason;
 	}
 
-	public @Nullable DailySalesSummary summary() {
-		return summary;
+	public @Nullable DailyFigures figures() {
+		return figures;
 	}
 }

@@ -8,9 +8,11 @@ import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.UUID;
@@ -28,19 +30,18 @@ import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
-import io.github.mpiumakkho.branchsales.consumer.dto.DailySalesSummary;
-import io.github.mpiumakkho.branchsales.consumer.dto.DailySalesSummary.SalesLine;
+import io.github.mpiumakkho.branchsales.consumer.dto.DailyFigures;
+import io.github.mpiumakkho.branchsales.consumer.dto.DailyFigures.Line;
+import io.github.mpiumakkho.branchsales.consumer.dto.RecordType;
 import io.github.mpiumakkho.branchsales.consumer.exception.RejectReason;
 import io.github.mpiumakkho.branchsales.consumer.exception.RejectedMessageException;
 
 /**
- * Parse, schema, identity and business layers of the contract checks. Needs no
- * database, so the reference layer is done separately by {@link ReferenceChecker}.
+ * Parse, schema, identity and business layers of the contract checks, for every record type (one JSON Schema
+ * each). Needs no database, so the reference layer is done separately by {@link ReferenceChecker}.
  */
 @Component
-public class SummaryValidator {
-
-	static final String SCHEMA_RESOURCE = "/contract/daily-sales-summary.v1.schema.json";
+public class RecordValidator {
 
 	private static final int MAX_SCHEMA_ERRORS_IN_DETAIL = 5;
 
@@ -50,9 +51,9 @@ public class SummaryValidator {
 			.enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
 			.build();
 
-	private final Schema schema;
+	private final Map<RecordType, Schema> schemas = new EnumMap<>(RecordType.class);
 
-	public SummaryValidator() {
+	public RecordValidator() {
 		// Format assertions are off by default since draft 2019-09; the contract requires uuid, date and date-time checks.
 		var config = SchemaRegistryConfig.builder()
 				.formatAssertionsEnabled(true)
@@ -60,30 +61,33 @@ public class SummaryValidator {
 				.build();
 		var registry = SchemaRegistry.withDefaultDialect(SpecificationVersion.DRAFT_2020_12,
 				builder -> builder.schemaRegistryConfig(config));
-		try (InputStream in = SummaryValidator.class.getResourceAsStream(SCHEMA_RESOURCE)) {
-			if (in == null) {
-				throw new IllegalStateException("JSON Schema not found on classpath: " + SCHEMA_RESOURCE);
+		for (RecordType type : RecordType.values()) {
+			try (InputStream in = RecordValidator.class.getResourceAsStream(type.schemaResource())) {
+				if (in == null) {
+					throw new IllegalStateException("JSON Schema not found on classpath: " + type.schemaResource());
+				}
+				schemas.put(type, registry.getSchema(in));
 			}
-			this.schema = registry.getSchema(in);
-		}
-		catch (IOException e) {
-			throw new UncheckedIOException(e);
+			catch (IOException e) {
+				throw new UncheckedIOException(e);
+			}
 		}
 	}
 
 	/**
+	 * @param type       the record type of the topic the record was read from
 	 * @param branchCode the branch whose Kafka cluster the record was read from (branch registry)
 	 * @param key        the record key
 	 * @throws RejectedMessageException if the record fails a parse, schema, identity or business check
 	 */
-	public DailySalesSummary validate(String branchCode, String key, byte[] value) {
+	public DailyFigures validate(RecordType type, String branchCode, String key, byte[] value) {
 		JsonNode root = parse(value);
-		checkSchema(root);
-		DailySalesSummary summary = toSummary(root);
-		checkIdentity(summary, branchCode, key);
-		checkTotal(summary);
-		checkUniqueCategories(summary);
-		return summary;
+		checkSchema(type, root);
+		DailyFigures figures = toFigures(type, root);
+		checkIdentity(figures, branchCode, key);
+		checkTotal(figures);
+		checkUniqueCategories(figures);
+		return figures;
 	}
 
 	private JsonNode parse(byte[] value) {
@@ -98,8 +102,8 @@ public class SummaryValidator {
 		}
 	}
 
-	private void checkSchema(JsonNode root) {
-		List<Error> errors = schema.validate(root);
+	private void checkSchema(RecordType type, JsonNode root) {
+		List<Error> errors = schemas.get(type).validate(root);
 		if (!errors.isEmpty()) {
 			String detail = errors.stream()
 					.limit(MAX_SCHEMA_ERRORS_IN_DETAIL)
@@ -113,19 +117,20 @@ public class SummaryValidator {
 	}
 
 	// Called only after the schema check, so required fields are present and have the right JSON types.
-	private DailySalesSummary toSummary(JsonNode root) {
+	private DailyFigures toFigures(RecordType type, JsonNode root) {
 		try {
-			List<SalesLine> lines = new ArrayList<>();
+			List<Line> lines = new ArrayList<>();
 			for (JsonNode line : root.get("lines")) {
-				lines.add(new SalesLine(
+				lines.add(new Line(
 						line.get("categoryCode").asString(),
 						new BigDecimal(line.get("amount").asString()),
 						exactLong(line.get("quantity"), "quantity")));
 			}
-			return new DailySalesSummary(
+			return new DailyFigures(
+					type,
 					UUID.fromString(root.get("eventId").asString()),
 					root.get("branchCode").asString(),
-					LocalDate.parse(root.get("saleDate").asString()),
+					LocalDate.parse(root.get(type.dateField()).asString()),
 					exactInt(root.get("revision"), "revision"),
 					OffsetDateTime.parse(root.get("confirmedAt").asString()),
 					new BigDecimal(root.get("totalAmount").asString()),
@@ -155,39 +160,39 @@ public class SummaryValidator {
 	 * HQ reaches each branch's Kafka through the address registered for that branch, so the cluster identifies the
 	 * sender (requirements Q5, §11). The key must still be the branch code (Q7).
 	 */
-	private static void checkIdentity(DailySalesSummary summary, String branchCode, String key) {
-		if (!branchCode.equals(summary.branchCode())) {
+	private static void checkIdentity(DailyFigures figures, String branchCode, String key) {
+		if (!branchCode.equals(figures.branchCode())) {
 			throw new RejectedMessageException(RejectReason.BRANCH_MISMATCH,
-					"branchCode " + summary.branchCode() + " read from the Kafka of branch " + branchCode, summary);
+					"branchCode " + figures.branchCode() + " read from the Kafka of branch " + branchCode, figures);
 		}
-		if (!summary.branchCode().equals(key)) {
+		if (!figures.branchCode().equals(key)) {
 			throw new RejectedMessageException(RejectReason.KEY_MISMATCH,
-					"record key " + (key == null ? "missing" : "'" + key + "'") + ", branchCode " + summary.branchCode(),
-					summary);
+					"record key " + (key == null ? "missing" : "'" + key + "'") + ", branchCode " + figures.branchCode(),
+					figures);
 		}
 	}
 
-	private static void checkTotal(DailySalesSummary summary) {
-		BigDecimal sum = summary.lines().stream()
-				.map(SalesLine::amount)
+	private static void checkTotal(DailyFigures figures) {
+		BigDecimal sum = figures.lines().stream()
+				.map(Line::amount)
 				.reduce(BigDecimal.ZERO, BigDecimal::add);
-		if (summary.totalAmount().compareTo(sum) != 0) {
+		if (figures.totalAmount().compareTo(sum) != 0) {
 			throw new RejectedMessageException(RejectReason.TOTAL_MISMATCH,
-					"totalAmount " + summary.totalAmount() + " but lines sum to " + sum, summary);
+					"totalAmount " + figures.totalAmount() + " but lines sum to " + sum, figures);
 		}
 	}
 
-	private static void checkUniqueCategories(DailySalesSummary summary) {
+	private static void checkUniqueCategories(DailyFigures figures) {
 		Set<String> seen = new HashSet<>();
 		Set<String> duplicates = new TreeSet<>();
-		for (SalesLine line : summary.lines()) {
+		for (Line line : figures.lines()) {
 			if (!seen.add(line.categoryCode())) {
 				duplicates.add(line.categoryCode());
 			}
 		}
 		if (!duplicates.isEmpty()) {
 			throw new RejectedMessageException(RejectReason.DUPLICATE_CATEGORY, "repeated categoryCode " + duplicates,
-					summary);
+					figures);
 		}
 	}
 }

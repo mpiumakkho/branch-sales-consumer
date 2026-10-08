@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "type": "DAILY_RETURN",
+  "branchCode": "BR0001",
+  "sourceOffset": 0,
+  "eventId": "7b2d9c40-5e1f-4a8b-9c3d-2f6e8a1b4c5d",
+  "saleDate": "2026-10-01",
+  "revision": 1,
+  "outcome": "REJECTED",
+  "rejectReason": "PARENT_MISSING",
+  "detail": "PARENT_MISSING: no daily sales of BR0001 for 2026-10-01 at HQ yet; replayed when they arrive",
+  "processedAt": "2026-10-01T22:00:04.120+07:00"
+}

@@ -52,7 +52,7 @@ public class BranchListeners implements DisposableBean {
 	private final BranchRegistry registry;
 	private final BranchKafkaClients clients;
 	private final BranchKafkaProperties properties;
-	private final DailySummaryListener listener;
+	private final BranchRecordListener listener;
 	private final Map<String, Connection> connections = new ConcurrentHashMap<>();
 	// Branches of the last refresh that could not be connected, with the reason (health endpoint)
 	private final Map<String, String> unreachable = new ConcurrentHashMap<>();
@@ -60,7 +60,7 @@ public class BranchListeners implements DisposableBean {
 	private final AtomicReference<Instant> lastRefresh = new AtomicReference<>();
 
 	public BranchListeners(BranchRegistry registry, BranchKafkaClients clients, BranchKafkaProperties properties,
-			DailySummaryListener listener) {
+			BranchRecordListener listener) {
 		this.registry = registry;
 		this.clients = clients;
 		this.properties = properties;
@@ -144,7 +144,7 @@ public class BranchListeners implements DisposableBean {
 		var consumerFactory = new DefaultKafkaConsumerFactory<>(clients.consumerConfig(branchCode, bootstrap),
 				new StringDeserializer(), new ByteArrayDeserializer());
 
-		var containerProperties = new ContainerProperties(properties.summaryTopic());
+		var containerProperties = new ContainerProperties(properties.recordTopics());
 		containerProperties.setAckMode(ContainerProperties.AckMode.BATCH);
 		containerProperties.setMessageListener(
 				(BatchMessageListener<String, byte[]>) records -> listener.onBatch(branchCode, receipts, records));

@@ -8,14 +8,17 @@ import org.jspecify.annotations.Nullable;
 
 import io.github.mpiumakkho.branchsales.consumer.exception.RejectReason;
 import io.github.mpiumakkho.branchsales.consumer.exception.RejectedMessageException;
-import io.github.mpiumakkho.branchsales.consumer.repository.DailySalesStore;
+import io.github.mpiumakkho.branchsales.consumer.repository.DailyFiguresStore;
 
 /**
- * A {@code DailySalesReceipt} (contract/daily-sales-receipt.v1.schema.json): what HQ did with one summary record.
+ * A {@code DailySalesReceipt} (contract/daily-sales-receipt.v1.schema.json): what HQ did with one record of a
+ * branch, a summary or a return.
  *
+ * @param type    the record's type: the receipt is matched by (type, sourceOffset), since offsets are per topic
  * @param outcome INSERTED, UPDATED, DUPLICATE, STALE or REJECTED
  */
 public record Receipt(
+		RecordType type,
 		String branchCode,
 		long sourceOffset,
 		@Nullable UUID eventId,
@@ -32,19 +35,19 @@ public record Receipt(
 	/** Contract limit of {@code detail}. */
 	static final int MAX_DETAIL_LENGTH = 2000;
 
-	public static Receipt stored(String branchCode, long sourceOffset, DailySalesSummary summary,
-			DailySalesStore.Result result, OffsetDateTime processedAt) {
-		return new Receipt(branchCode, sourceOffset, summary.eventId(), summary.saleDate(), summary.revision(),
+	public static Receipt stored(RecordType type, String branchCode, long sourceOffset, DailyFigures figures,
+			DailyFiguresStore.Result result, OffsetDateTime processedAt) {
+		return new Receipt(type, branchCode, sourceOffset, figures.eventId(), figures.date(), figures.revision(),
 				result.outcome().name(), result.storedRevision(), null, null, processedAt);
 	}
 
-	public static Receipt rejected(String branchCode, long sourceOffset, RejectedMessageException rejection,
-			OffsetDateTime processedAt) {
-		DailySalesSummary summary = rejection.summary();
-		return new Receipt(branchCode, sourceOffset,
-				summary == null ? null : summary.eventId(),
-				summary == null ? null : summary.saleDate(),
-				summary == null ? null : summary.revision(),
+	public static Receipt rejected(RecordType type, String branchCode, long sourceOffset,
+			RejectedMessageException rejection, OffsetDateTime processedAt) {
+		DailyFigures figures = rejection.figures();
+		return new Receipt(type, branchCode, sourceOffset,
+				figures == null ? null : figures.eventId(),
+				figures == null ? null : figures.date(),
+				figures == null ? null : figures.revision(),
 				REJECTED, null, rejection.reason(), truncate(rejection.getMessage()), processedAt);
 	}
 

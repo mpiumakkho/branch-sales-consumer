@@ -25,7 +25,7 @@ import tools.jackson.databind.JsonNode;
 import io.github.mpiumakkho.branchsales.consumer.ContractExamples;
 import io.github.mpiumakkho.branchsales.consumer.TestBranch;
 import io.github.mpiumakkho.branchsales.consumer.TestcontainersConfiguration;
-import io.github.mpiumakkho.branchsales.consumer.repository.DailySalesStore;
+import io.github.mpiumakkho.branchsales.consumer.repository.DailyFiguresStore;
 
 /**
  * A database failure is not a contract rejection: the record must be retried until it is stored. It must not be
@@ -37,7 +37,7 @@ import io.github.mpiumakkho.branchsales.consumer.repository.DailySalesStore;
 class DatabaseFailureTest {
 
 	@MockitoSpyBean
-	DailySalesStore store;
+	DailyFiguresStore store;
 
 	@Autowired
 	JdbcClient jdbc;

@@ -62,6 +62,7 @@ class DailySummaryFlowTest {
 
 	@BeforeEach
 	void setUp() {
+		jdbc.sql("delete from branch_daily_return").update();
 		jdbc.sql("delete from branch_daily_sales").update();
 		jdbc.sql("delete from dead_letter").update();
 		br0001 = TestBranch.open("BR0001", br0001Kafka);
@@ -205,6 +206,51 @@ class DailySummaryFlowTest {
 	}
 
 	@Test
+	void storesReturnsOfADayWhoseSalesAreAtHq() {
+		long salesOffset = br0001.send(ContractExamples.read("valid/basic.json"));
+		long returnOffset = br0001.sendReturn(ContractExamples.readReturn("valid/basic.json"));
+
+		List<JsonNode> receipts = br0001.readReceipts(2);
+		assertThat(receipts).extracting(r -> r.path("type").asString() + " " + r.get("outcome").asString())
+				.containsExactly("DAILY_SUMMARY INSERTED", "DAILY_RETURN INSERTED");
+		// Offsets are per topic (both start at 0 in a fresh branch); the receipt's type tells them apart
+		assertThat(receipts).extracting(r -> r.get("sourceOffset").asLong()).containsExactly(salesOffset, returnOffset);
+		assertThat(receipts.get(1).get("saleDate").asString()).isEqualTo("2026-10-01");
+		assertThat(returnLines("BR0001")).containsExactly("BEVERAGE 120.00 3", "HOUSEHOLD 230.00 2");
+		assertThat(jdbc.sql("select count(*) from dead_letter").query(Integer.class).single()).isZero();
+	}
+
+	@Test
+	void holdsAReturnThatArrivesBeforeItsSalesAndReplaysItWhenTheyArrive() {
+		long returnOffset = br0001.sendReturn(ContractExamples.readReturn("valid/basic.json"));
+
+		// No sales of 2026-10-01 at HQ yet: kept in dead_letter, the branch is told why, nothing is skipped
+		JsonNode rejected = br0001.readReceipts(1).getFirst();
+		assertThat(rejected.get("type").asString()).isEqualTo("DAILY_RETURN");
+		assertThat(rejected.get("rejectReason").asString()).isEqualTo("PARENT_MISSING");
+		assertThat(rejected.get("saleDate").asString()).isEqualTo("2026-10-01");
+		assertThat(jdbc.sql("select record_type || ' ' || record_date from dead_letter").query(String.class).single())
+				.isEqualTo("DAILY_RETURN 2026-10-01");
+		assertThat(returnLines("BR0001")).isEmpty();
+
+		// The sales arrive: HQ stores them and replays the waiting return by itself, with a second receipt
+		long salesOffset = br0001.send(ContractExamples.read("valid/basic.json"));
+		List<JsonNode> receipts = br0001.readReceipts(2);
+		assertThat(receipts).extracting(r -> r.get("type").asString() + " " + r.get("outcome").asString()
+				+ " " + r.get("sourceOffset").asLong())
+				.containsExactly("DAILY_SUMMARY INSERTED " + salesOffset, "DAILY_RETURN INSERTED " + returnOffset);
+		assertThat(returnLines("BR0001")).containsExactly("BEVERAGE 120.00 3", "HOUSEHOLD 230.00 2");
+		await().atMost(TIMEOUT).until(() -> "INSERTED".equals(jdbc
+				.sql("select replay_result from dead_letter where record_type = 'DAILY_RETURN' and source_offset = ?")
+				.param(returnOffset)
+				.query(String.class).single()));
+		// Done once: a later revision of the sales does not replay it again
+		br0001.send(ContractExamples.read("valid/revision-2.json"));
+		assertThat(br0001.readReceipts(1).getFirst().get("outcome").asString()).isEqualTo("UPDATED");
+		assertThat(br0001.pollReceipts(Duration.ofSeconds(2))).isEmpty();
+	}
+
+	@Test
 	void followsTheBranchRegistry() {
 		// Offboarded: HQ stops reading the branch; records wait in the branch's Kafka
 		jdbc.sql("update branch set kafka_bootstrap = null where branch_code = 'BR0002'").update();
@@ -287,6 +333,19 @@ class DailySummaryFlowTest {
 				.params(branchCode, SALE_DATE)
 				.query(UUID.class)
 				.single();
+	}
+
+	private List<String> returnLines(String branchCode) {
+		return jdbc.sql("""
+				select l.category_code || ' ' || l.amount || ' ' || l.quantity
+				  from branch_daily_return_line l
+				  join branch_daily_return h on h.id = l.branch_daily_return_id
+				 where h.branch_code = ? and h.return_date = ?
+				 order by l.category_code
+				""")
+				.params(branchCode, SALE_DATE)
+				.query(String.class)
+				.list();
 	}
 
 	private List<String> lines(String branchCode) {

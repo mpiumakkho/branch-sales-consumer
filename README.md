@@ -2,7 +2,7 @@
 
 [![ci](https://github.com/mpiumakkho/branch-sales-consumer/actions/workflows/ci.yml/badge.svg)](https://github.com/mpiumakkho/branch-sales-consumer/actions/workflows/ci.yml)
 
-HQ side of Branch Daily Sales Sync. Every branch runs its own Kafka broker; the consumer connects to each branch in the HQ branch registry, reads the confirmed daily sales summaries the branch published, validates them against the [message contract](contract/), stores them in the HQ PostgreSQL database, and writes a receipt back to the branch for every record.
+HQ side of Branch Daily Sales Sync. Every branch runs its own Kafka broker; the consumer connects to each branch in the HQ branch registry, reads the records the branch published (daily sales summaries and daily returns, one topic each), validates them against the [message contract](contract/), stores them in the HQ PostgreSQL database, and writes a receipt back to the branch for every record.
 
 | Folder | Content |
 |---|---|
@@ -17,8 +17,8 @@ HQ side of Branch Daily Sales Sync. Every branch runs its own Kafka broker; the 
 ```
 branch registry (table branch, kafka_bootstrap)  ──► one listener container per branch, refreshed every minute
         │
-        └──► branch-sales.daily-summary in that branch's Kafka ──► per record:
-                  parse → schema → identity (branch, key) → business → reference (branch, category)
+        └──► branch-sales.daily-summary and branch-sales.daily-return in that branch's Kafka ──► per record (type = topic):
+                  parse → schema of the type → identity (branch, key) → business → reference (branch, category; a return: its day's sales)
                                      │ fail                                 │ pass
                                      ▼                                      ▼
                         table dead_letter (bytes unchanged)      upsert by revision, own DB transaction
@@ -29,6 +29,7 @@ branch registry (table branch, kafka_bootstrap)  ──► one listener containe
 
 - The consumer reaches a branch through the address registered for it, so the cluster identifies the sender: a message whose `branchCode` is not that branch is rejected (`BRANCH_MISMATCH`), as is a key that is not the `branchCode` (`KEY_MISMATCH`). Validation layers and reject reasons: [`contract/README.md`](contract/README.md). The schema files are copied from `contract/` onto the classpath at build time, so there is one copy only.
 - Each record gets its own database transaction. A rejected record is kept in `dead_letter` and the batch continues.
+- Record types: a `DailySalesSummary` goes to `branch_daily_sales`, a `DailyReturn` to `branch_daily_return`, through the same pipeline (`RecordType` names the schema, the date field and the tables). A return whose day's sales are not stored yet is rejected with `PARENT_MISSING` and held in `dead_letter`; when the sales of that branch and date are stored (from a batch or a replay), the same transaction asks for the return's replay, and the replayer sends the branch a second receipt within the replay interval. Sales and returns of one branch arrive on two topics, so their order is not guaranteed; this is what makes the arrival order irrelevant.
 - Every record gets a receipt (`INSERTED`, `UPDATED`, `DUPLICATE`, `STALE` or `REJECTED` with the reason), written to the branch's receipt topic after the database commit. The consumer waits for the branch broker's ack before moving on, and commits offsets after the listener returns (ack mode `BATCH`), so a branch never misses a receipt for a record HQ has handled.
 - Revisions (rules R4–R6): one `INSERT ... ON CONFLICT DO UPDATE ... WHERE stored.revision < incoming.revision`. A higher revision replaces the header and all lines; the same revision is `DUPLICATE`; a lower one is `STALE` (logged at WARN). Neither is a rejection.
 - Any other failure (HQ database or the branch broker unreachable) is retried with exponential back-off (1 s up to 60 s) and no attempt limit, per branch. Records before the failed one are committed; that branch waits at the failed record and nothing is skipped. Other branches are not affected: each has its own container and thread.
@@ -42,7 +43,7 @@ Health and Prometheus metrics on the HTTP port (`CONSUMER_HTTP_PORT`, 8081). The
 | Endpoint | Content |
 |---|---|
 | `/actuator/health` | `UP` or `DOWN`. Component `branches`: `registered` and `connected` branches of this shard, `unreachable` with the reason per branch, `lastRegistryRefresh`. The instance is `DOWN` when the registry has branches for its shard and none is connected; one unreachable branch keeps it `UP` and is listed. Component `db`: the HQ database |
-| `/actuator/prometheus` | `branch_sales_receipts_total{outcome,reason}` receipts the branches acknowledged, by outcome (`reason` is the reject reason for `REJECTED`, else `none`); counted after the ack, from batches and replays alike, and every series exists from start-up. `branch_sales_branches_registered`, `_connected`, `_unreachable`. `branch_sales_dead_letters_open` rejected records not replayed successfully yet (all shards), read from the database at the replay interval, never during a scrape. Plus the JDBC pool, HTTP and JVM metrics from Spring Boot. The Kafka clients of the branches are not instrumented (one set of client metrics per branch would be thousands of series) |
+| `/actuator/prometheus` | `branch_sales_receipts_total{type,outcome,reason}` receipts the branches acknowledged, by record type and outcome (`reason` is the reject reason for `REJECTED`, else `none`); counted after the ack, from batches and replays alike, and every series exists from start-up. `branch_sales_branches_registered`, `_connected`, `_unreachable`. `branch_sales_dead_letters_open` rejected records not replayed successfully yet (all shards), read from the database at the replay interval, never during a scrape. Plus the JDBC pool, HTTP and JVM metrics from Spring Boot. The Kafka clients of the branches are not instrumented (one set of client metrics per branch would be thousands of series) |
 
 Alerts worth having: `branch_sales_branches_unreachable > 0` for longer than a registry refresh, `increase(branch_sales_receipts_total{outcome="REJECTED"}[1h]) > 0`, `branch_sales_dead_letters_open` growing, and health `DOWN`. A listener that stops itself because the branch broker refuses HQ's credentials (wrong password, missing ACL) is reported as unreachable at the next refresh and reconnected at the one after, so it shows up as `unreachable` flapping once a minute.
 
@@ -66,7 +67,9 @@ Flyway migrations in [`src/main/resources/db/migration`](src/main/resources/db/m
 | `category` | Standard categories from [`contract/categories.md`](contract/categories.md), seeded by `V2` |
 | `branch_daily_sales` | One row per `(branch_code, sale_date)` with the highest revision received, its `event_id`, `confirmed_at` and `received_at` |
 | `branch_daily_sales_line` | Category lines of that revision |
-| `dead_letter` | Rejected records, one per `(branch_code, source_offset)`, with replay request and result |
+| `branch_daily_return` | One row per `(branch_code, return_date)` with the highest revision received; stored only when `branch_daily_sales` has that branch and date (not a foreign key: a new revision of the sales never cascades) |
+| `branch_daily_return_line` | Category lines of that revision |
+| `dead_letter` | Rejected records, one per `(branch_code, record_type, source_offset)`, with the business date when readable, replay request and result |
 
 The upsert uses `RETURNING old.*`, which needs PostgreSQL 18 or later.
 
@@ -118,7 +121,7 @@ Needs Docker. The tests start a PostgreSQL container and one Kafka container per
 
 | Test | Checks |
 |---|---|
-| `SummaryValidatorTest` | every file in `contract/examples/` gets its expected result from the parse, schema, identity and business layers; layer order; edge cases (not JSON, repeated key, formats, out-of-range numbers) |
-| `DailySummaryFlowTest` | through two branch brokers: valid examples stored, every invalid example in `dead_letter` with unchanged bytes and a `REJECTED` receipt with the right reason, one receipt per record matched by source offset (checked against the receipt schema), `BRANCH_MISMATCH` / `KEY_MISMATCH`, revision rules R4–R6 with their receipts, replay of a dead letter after the cause is fixed, following the registry (offboard, onboard, a branch in another shard, a branch that cannot be connected yet) |
+| `RecordValidatorTest` | every file in `contract/examples/` gets its expected result from the parse, schema, identity and business layers; layer order; edge cases (not JSON, repeated key, formats, out-of-range numbers); return examples are checked against the return schema and a summary fails it |
+| `DailySummaryFlowTest` | through two branch brokers: valid examples stored, every invalid example in `dead_letter` with unchanged bytes and a `REJECTED` receipt with the right reason, one receipt per record matched by source offset (checked against the receipt schema), `BRANCH_MISMATCH` / `KEY_MISMATCH`, revision rules R4–R6 with their receipts, replay of a dead letter after the cause is fixed, a return stored after its day's sales and one held as `PARENT_MISSING` and replayed by HQ when the sales arrive, following the registry (offboard, onboard, a branch in another shard, a branch that cannot be connected yet) |
 | `DatabaseFailureTest` | a database error is retried until the record is stored, with exactly one receipt and no dead letter |
 | `ObservabilityTest` | health lists connected and unreachable branches and is `DOWN` with none connected; the Prometheus endpoint has the receipt counter and the branch gauges |

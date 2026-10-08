@@ -18,12 +18,13 @@ import org.junit.jupiter.params.provider.FieldSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import io.github.mpiumakkho.branchsales.consumer.ContractExamples;
-import io.github.mpiumakkho.branchsales.consumer.dto.DailySalesSummary;
-import io.github.mpiumakkho.branchsales.consumer.dto.DailySalesSummary.SalesLine;
+import io.github.mpiumakkho.branchsales.consumer.dto.DailyFigures;
+import io.github.mpiumakkho.branchsales.consumer.dto.DailyFigures.Line;
+import io.github.mpiumakkho.branchsales.consumer.dto.RecordType;
 import io.github.mpiumakkho.branchsales.consumer.exception.RejectReason;
 import io.github.mpiumakkho.branchsales.consumer.exception.RejectedMessageException;
 
-class SummaryValidatorTest {
+class RecordValidatorTest {
 
 	private static final Map<String, RejectReason> REJECTED = Map.of(
 			"invalid-schema/amount-as-number.json", RejectReason.SCHEMA_INVALID,
@@ -43,7 +44,7 @@ class SummaryValidatorTest {
 
 	static final List<String> EXAMPLES = ContractExamples.all();
 
-	private final SummaryValidator validator = new SummaryValidator();
+	private final RecordValidator validator = new RecordValidator();
 
 	@Test
 	void everyContractExampleHasAnExpectedResult() {
@@ -66,22 +67,43 @@ class SummaryValidatorTest {
 
 	@Test
 	void mapsFieldsWithMoneyAsBigDecimal() {
-		DailySalesSummary summary = validate(ContractExamples.read("valid/basic.json"));
+		DailyFigures summary = validate(ContractExamples.read("valid/basic.json"));
 
 		assertThat(summary.eventId()).isEqualTo(UUID.fromString("3f1c2a9e-8b4d-4c1e-9f2a-6d7e8a9b0c1d"));
 		assertThat(summary.branchCode()).isEqualTo("BR0001");
-		assertThat(summary.saleDate()).isEqualTo(LocalDate.of(2026, 10, 1));
+		assertThat(summary.type()).isEqualTo(RecordType.DAILY_SUMMARY);
+		assertThat(summary.date()).isEqualTo(LocalDate.of(2026, 10, 1));
 		assertThat(summary.revision()).isEqualTo(1);
 		assertThat(summary.confirmedAt().toString()).isEqualTo("2026-10-01T21:45+07:00");
 		assertThat(summary.totalAmount()).isEqualTo(new BigDecimal("41870.50"));
 		assertThat(summary.lines()).hasSize(4)
-				.first().isEqualTo(new SalesLine("BEVERAGE", new BigDecimal("18200.00"), 410));
+				.first().isEqualTo(new Line("BEVERAGE", new BigDecimal("18200.00"), 410));
 	}
 
 	@ParameterizedTest
 	@ValueSource(strings = { "not json", "{\"schemaVersion\": 1", "{} {}" })
 	void rejectsValueThatIsNotJson(String value) {
 		assertRejected(value.getBytes(StandardCharsets.UTF_8), RejectReason.INVALID_JSON);
+	}
+
+	@Test
+	void returnExamplesAreCheckedAgainstTheReturnSchema() {
+		DailyFigures figures = validator.validate(RecordType.DAILY_RETURN, "BR0001", "BR0001",
+				ContractExamples.readReturn("valid/basic.json"));
+		assertThat(figures.type()).isEqualTo(RecordType.DAILY_RETURN);
+		assertThat(figures.date()).isEqualTo(LocalDate.of(2026, 10, 1));
+		assertThat(figures.totalAmount()).isEqualTo(new BigDecimal("350.00"));
+
+		// returnDate is the date field of a return; a summary sent to the return topic has saleDate instead
+		assertThatThrownBy(() -> validator.validate(RecordType.DAILY_RETURN, "BR0001", "BR0001",
+				ContractExamples.readReturn("invalid-schema/sale-date-instead-of-return-date.json")))
+				.extracting(e -> ((RejectedMessageException) e).reason()).isEqualTo(RejectReason.SCHEMA_INVALID);
+		assertThatThrownBy(() -> validator.validate(RecordType.DAILY_RETURN, "BR0001", "BR0001",
+				ContractExamples.read("valid/basic.json")))
+				.extracting(e -> ((RejectedMessageException) e).reason()).isEqualTo(RejectReason.SCHEMA_INVALID);
+		// and a return sent to the summary topic fails the summary schema
+		assertThatThrownBy(() -> validate(ContractExamples.readReturn("valid/basic.json")))
+				.extracting(e -> ((RejectedMessageException) e).reason()).isEqualTo(RejectReason.SCHEMA_INVALID);
 	}
 
 	@Test
@@ -114,7 +136,7 @@ class SummaryValidatorTest {
 
 	@Test
 	void rejectsBranchCodeThatIsNotTheClusterBranch() {
-		assertThatThrownBy(() -> validator.validate("BR0002", "BR0001",
+		assertThatThrownBy(() -> validator.validate(RecordType.DAILY_SUMMARY, "BR0002", "BR0001",
 				ContractExamples.read("valid/basic.json")))
 				.isInstanceOf(RejectedMessageException.class)
 				.hasMessage("BRANCH_MISMATCH: branchCode BR0001 read from the Kafka of branch BR0002");
@@ -123,28 +145,28 @@ class SummaryValidatorTest {
 	@Test
 	void rejectsKeyThatIsNotTheBranchCode() {
 		byte[] value = ContractExamples.read("valid/basic.json");
-		assertThatThrownBy(() -> validator.validate("BR0001", "BR0002", value))
+		assertThatThrownBy(() -> validator.validate(RecordType.DAILY_SUMMARY, "BR0001", "BR0002", value))
 				.hasMessage("KEY_MISMATCH: record key 'BR0002', branchCode BR0001");
-		assertThatThrownBy(() -> validator.validate("BR0001", null, value))
+		assertThatThrownBy(() -> validator.validate(RecordType.DAILY_SUMMARY, "BR0001", null, value))
 				.hasMessage("KEY_MISMATCH: record key missing, branchCode BR0001");
 	}
 
 	@Test
 	void identityIsCheckedAfterSchemaAndBeforeBusinessRules() {
 		// Schema error wins over a wrong branch
-		assertThatThrownBy(() -> validator.validate("BR0002", "BR0001",
+		assertThatThrownBy(() -> validator.validate(RecordType.DAILY_SUMMARY, "BR0002", "BR0001",
 				ContractExamples.read("invalid-schema/revision-zero.json")))
 				.extracting(e -> ((RejectedMessageException) e).reason()).isEqualTo(RejectReason.SCHEMA_INVALID);
 		// A wrong branch wins over a business error
-		assertThatThrownBy(() -> validator.validate("BR0002", "BR0001",
+		assertThatThrownBy(() -> validator.validate(RecordType.DAILY_SUMMARY, "BR0002", "BR0001",
 				ContractExamples.read("invalid-business/total-mismatch.json")))
 				.extracting(e -> ((RejectedMessageException) e).reason()).isEqualTo(RejectReason.BRANCH_MISMATCH);
 	}
 
 	/** Validates as read from the cluster of the branch in the value, key = branchCode. */
-	private DailySalesSummary validate(byte[] value) {
+	private DailyFigures validate(byte[] value) {
 		String branch = ContractExamples.branchCodeOf(value);
-		return validator.validate(branch, branch, value);
+		return validator.validate(RecordType.DAILY_SUMMARY, branch, branch, value);
 	}
 
 	private void assertRejected(byte[] value, RejectReason reason) {

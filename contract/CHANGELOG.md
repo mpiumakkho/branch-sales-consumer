@@ -1,5 +1,11 @@
 # Contract changelog
 
+## v1 — 2026-10-08 (daily returns)
+
+- New record type `DailyReturn` v1 ([schema](daily-return.v1.schema.json)): the confirmed returns and voids of one day by category, same shape as the summary with `returnDate` instead of `saleDate`. Sent to the new topic `branch-sales.daily-return` in the branch's cluster (`kafka-init` creates it; HQ's user gets Read on it).
+- HQ stores a return only when it holds the branch's `DailySalesSummary` of the same date; otherwise `PARENT_MISSING`, a new reject reason, and HQ replays the return by itself when that summary arrives.
+- `DailySalesReceipt` gets the optional field `type` (`DAILY_SUMMARY` or `DAILY_RETURN`; absent = `DAILY_SUMMARY`). Receipts are matched by `(type, sourceOffset)`, since offsets are per topic. `saleDate` in a receipt carries the record's business date, so a return's `returnDate`. The summary schema does not change.
+
 ## v1 — 2026-10-05 (Kafka at the branch, receipts)
 
 The summary schema does not change (`schemaVersion` stays 1). Where it travels and what comes back does:
