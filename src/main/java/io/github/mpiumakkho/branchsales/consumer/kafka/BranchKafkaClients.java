@@ -9,6 +9,7 @@ import java.util.Map;
 import java.util.regex.Pattern;
 
 import org.apache.kafka.clients.CommonClientConfigs;
+import org.apache.kafka.clients.admin.AdminClientConfig;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.config.SaslConfigs;
@@ -42,6 +43,20 @@ public class BranchKafkaClients {
 		config.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap);
 		config.put(ConsumerConfig.GROUP_ID_CONFIG, branchKafka.groupId());
 		config.put(ConsumerConfig.CLIENT_ID_CONFIG, "hq-consumer-" + branchCode);
+		addSecurity(config, branchCode);
+		return config;
+	}
+
+	/**
+	 * Settings of a short-lived admin client that asks the branch broker which record topics HQ can read there.
+	 * @throws IllegalStateException if HQ's password for this branch is missing or invalid
+	 */
+	public Map<String, Object> adminConfig(String branchCode, String bootstrap) {
+		Map<String, Object> config = new HashMap<>();
+		config.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap);
+		config.put(AdminClientConfig.CLIENT_ID_CONFIG, "hq-admin-" + branchCode);
+		config.put(AdminClientConfig.REQUEST_TIMEOUT_MS_CONFIG, 10_000);
+		config.put(AdminClientConfig.DEFAULT_API_TIMEOUT_MS_CONFIG, 10_000);
 		addSecurity(config, branchCode);
 		return config;
 	}

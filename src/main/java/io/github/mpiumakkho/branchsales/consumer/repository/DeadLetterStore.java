@@ -61,9 +61,11 @@ public class DeadLetterStore {
 	 * @return how many rows were marked
 	 */
 	public int requestReplayOfReturnsWaitingFor(String branchCode, LocalDate date) {
+		// clock_timestamp(), not now(): the request must be later than a replayed_at written while this transaction
+		// was open, or findReplayRequested would never pick the row
 		return jdbc.sql("""
 				update dead_letter
-				   set replay_requested_at = now()
+				   set replay_requested_at = clock_timestamp()
 				 where branch_code = :branchCode
 				   and record_type = :type
 				   and record_date = :date
@@ -74,6 +76,31 @@ public class DeadLetterStore {
 				.param("type", RecordType.DAILY_RETURN.name())
 				.param("date", date)
 				.param("reason", RejectReason.PARENT_MISSING.name())
+				.update();
+	}
+
+	/**
+	 * A return was just rejected with PARENT_MISSING (from a batch or a replay). If its day's sales were stored
+	 * meanwhile, by the listener thread or the replayer, the request made by that sales transaction came before
+	 * this row existed or before it was marked: ask again now. Closes the window between the parent check and the
+	 * dead_letter write.
+	 * @return 1 if the parent exists and the replay was requested
+	 */
+	public int requestReplayIfParentExists(String branchCode, long sourceOffset, LocalDate date) {
+		return jdbc.sql("""
+				update dead_letter
+				   set replay_requested_at = clock_timestamp()
+				 where branch_code = :branchCode
+				   and record_type = :type
+				   and source_offset = :sourceOffset
+				   and reject_reason = :reason
+				   and exists (select 1 from branch_daily_sales s where s.branch_code = :branchCode and s.sale_date = :date)
+				""")
+				.param("branchCode", branchCode)
+				.param("type", RecordType.DAILY_RETURN.name())
+				.param("sourceOffset", sourceOffset)
+				.param("reason", RejectReason.PARENT_MISSING.name())
+				.param("date", date)
 				.update();
 	}
 

@@ -30,6 +30,7 @@ import io.github.mpiumakkho.branchsales.consumer.ContractExamples;
 import io.github.mpiumakkho.branchsales.consumer.TestBranch;
 import io.github.mpiumakkho.branchsales.consumer.TestcontainersConfiguration;
 import io.github.mpiumakkho.branchsales.consumer.exception.RejectReason;
+import io.github.mpiumakkho.branchsales.consumer.repository.DeadLetterStore;
 
 /**
  * Sends the contract example files through the Kafka brokers of two branches and checks what ends up in the HQ
@@ -48,6 +49,9 @@ class DailySummaryFlowTest {
 
 	@Autowired
 	BranchListeners listeners;
+
+	@Autowired
+	DeadLetterStore deadLetters;
 
 	@Autowired
 	@Qualifier("br0001Kafka")
@@ -248,6 +252,30 @@ class DailySummaryFlowTest {
 		br0001.send(ContractExamples.read("valid/revision-2.json"));
 		assertThat(br0001.readReceipts(1).getFirst().get("outcome").asString()).isEqualTo("UPDATED");
 		assertThat(br0001.pollReceipts(Duration.ofSeconds(2))).isEmpty();
+	}
+
+	@Test
+	void requestsTheReplayAgainWhenTheSalesArrivedWhileTheReturnWasBeingRejected() {
+		// The listener thread and the replayer can handle one branch at the same time: a return can pass its parent
+		// check (no sales yet) and be written to dead_letter after the sales were stored, so the sales transaction's
+		// request found no row. The write path asks again when the parent exists by then.
+		br0001.send(ContractExamples.read("valid/basic.json"));
+		br0001.readReceipts(1);
+		byte[] value = ContractExamples.readReturn("valid/basic.json");
+		jdbc.sql("""
+				insert into dead_letter (branch_code, record_type, source_offset, record_key, record_value, reject_reason,
+				  detail, record_date)
+				values ('BR0001', 'DAILY_RETURN', 7, 'BR0001', ?, 'PARENT_MISSING', 'PARENT_MISSING: raced', '2026-10-01')
+				""").param(value).update();
+
+		assertThat(deadLetters.requestReplayIfParentExists("BR0001", 7, SALE_DATE)).isEqualTo(1);
+
+		JsonNode receipt = br0001.readReceipts(1).getFirst();
+		assertThat(receipt.get("type").asString() + " " + receipt.get("outcome").asString()
+				+ " " + receipt.get("sourceOffset").asLong()).isEqualTo("DAILY_RETURN INSERTED 7");
+		assertThat(returnLines("BR0001")).containsExactly("BEVERAGE 120.00 3", "HOUSEHOLD 230.00 2");
+		// Without the parent, nothing is requested
+		assertThat(deadLetters.requestReplayIfParentExists("BR0001", 7, SALE_DATE.plusDays(1))).isZero();
 	}
 
 	@Test

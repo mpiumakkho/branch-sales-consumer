@@ -1,15 +1,23 @@
 package io.github.mpiumakkho.branchsales.consumer.listener;
 
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
+import org.apache.kafka.clients.admin.Admin;
+import org.apache.kafka.clients.admin.TopicDescription;
+import org.apache.kafka.common.KafkaFuture;
+import org.apache.kafka.common.errors.TopicAuthorizationException;
+import org.apache.kafka.common.errors.UnknownTopicOrPartitionException;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
 import org.apache.kafka.common.serialization.StringDeserializer;
@@ -45,8 +53,13 @@ public class BranchListeners implements DisposableBean {
 
 	private static final Logger log = LoggerFactory.getLogger(BranchListeners.class);
 
-	private record Connection(String bootstrap, KafkaMessageListenerContainer<String, byte[]> container,
+	/** @param topics the record topics the listener reads; fewer than all of them while the branch is not upgraded */
+	private record Connection(String bootstrap, List<String> topics, KafkaMessageListenerContainer<String, byte[]> container,
 			DefaultKafkaProducerFactory<String, byte[]> producerFactory, KafkaTemplate<String, byte[]> receipts) {
+
+		boolean partial(String[] allTopics) {
+			return topics.size() < allTopics.length;
+		}
 	}
 
 	private final BranchRegistry registry;
@@ -76,6 +89,11 @@ public class BranchListeners implements DisposableBean {
 			Connection connection = connections.get(branchCode);
 			if (bootstrap == null || !bootstrap.equals(connection.bootstrap())) {
 				disconnect(branchCode);
+			}
+			else if (connection.partial(properties.recordTopics()) && readableTopics(branchCode, bootstrap).size() > connection.topics().size()) {
+				// The branch now has the topic it lacked (its kafka-init ran): read all of them
+				disconnect(branchCode);
+				log.info("Branch {} now has all record topics; reconnecting", branchCode);
 			}
 			else if (!connection.container().isRunning()) {
 				// The listener stopped itself: the broker refused HQ's credentials (SASL) or the ACL is missing, which
@@ -144,7 +162,12 @@ public class BranchListeners implements DisposableBean {
 		var consumerFactory = new DefaultKafkaConsumerFactory<>(clients.consumerConfig(branchCode, bootstrap),
 				new StringDeserializer(), new ByteArrayDeserializer());
 
-		var containerProperties = new ContainerProperties(properties.recordTopics());
+		List<String> topics = readableTopics(branchCode, bootstrap);
+		if (topics.size() < properties.recordTopics().length) {
+			log.warn("Branch {} has only {} of the record topics {}: reading those until its kafka-init adds the rest",
+					branchCode, topics, List.of(properties.recordTopics()));
+		}
+		var containerProperties = new ContainerProperties(topics.toArray(String[]::new));
 		containerProperties.setAckMode(ContainerProperties.AckMode.BATCH);
 		containerProperties.setMessageListener(
 				(BatchMessageListener<String, byte[]>) records -> listener.onBatch(branchCode, receipts, records));
@@ -160,8 +183,42 @@ public class BranchListeners implements DisposableBean {
 			producerFactory.destroy();
 			throw e;
 		}
-		connections.put(branchCode, new Connection(bootstrap, container, producerFactory, receipts));
+		connections.put(branchCode, new Connection(bootstrap, topics, container, producerFactory, receipts));
 		log.info("Connected to branch {} at {}", branchCode, bootstrap);
+	}
+
+	/**
+	 * The record topics HQ can read at the branch. A branch not yet upgraded has no return topic (or no ACL on it);
+	 * subscribing to it would stop the listener (spring-kafka treats an authorization error as fatal), so it is left
+	 * out until the branch's kafka-init creates it. The summary topic must be readable.
+	 * @throws IllegalStateException if the broker cannot be asked, or the summary topic is not readable
+	 */
+	private List<String> readableTopics(String branchCode, String bootstrap) {
+		String[] wanted = properties.recordTopics();
+		List<String> readable = new ArrayList<>();
+		try (Admin admin = Admin.create(clients.adminConfig(branchCode, bootstrap))) {
+			Map<String, KafkaFuture<TopicDescription>> described = admin.describeTopics(List.of(wanted)).topicNameValues();
+			for (String topic : wanted) {
+				try {
+					described.get(topic).get();
+					readable.add(topic);
+				}
+				catch (ExecutionException e) {
+					if (!(e.getCause() instanceof UnknownTopicOrPartitionException
+							|| e.getCause() instanceof TopicAuthorizationException)) {
+						throw new IllegalStateException("cannot describe " + topic + " at " + bootstrap, e.getCause());
+					}
+				}
+			}
+		}
+		catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			throw new IllegalStateException("interrupted while describing the topics at " + bootstrap, e);
+		}
+		if (!readable.contains(properties.summaryTopic())) {
+			throw new IllegalStateException(properties.summaryTopic() + " is not readable at " + bootstrap);
+		}
+		return readable;
 	}
 
 	private void disconnect(String branchCode) {

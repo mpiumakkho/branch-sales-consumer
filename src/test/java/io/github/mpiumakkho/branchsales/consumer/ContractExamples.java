@@ -48,9 +48,18 @@ public final class ContractExamples {
 
 	/** Every example file, as paths relative to contract/examples with forward slashes. */
 	public static List<String> all() {
-		try (Stream<Path> files = Files.walk(ROOT)) {
+		return all(ROOT);
+	}
+
+	/** Every return example file, as paths relative to contract/return-examples with forward slashes. */
+	public static List<String> allReturns() {
+		return all(RETURN_ROOT);
+	}
+
+	private static List<String> all(Path root) {
+		try (Stream<Path> files = Files.walk(root)) {
 			return files.filter(p -> p.toString().endsWith(".json"))
-					.map(p -> ROOT.relativize(p).toString().replace('\\', '/'))
+					.map(p -> root.relativize(p).toString().replace('\\', '/'))
 					.sorted()
 					.toList();
 		}

@@ -40,8 +40,8 @@ Status queries used throughout:
 # HQ: what HQ has stored
 docker exec -i hq-db psql -U hq_app -d hq_sales < branch-sales-consumer/demo/hq-status.sql
 # HQ: rejected records
-docker exec hq-db psql -U hq_app -d hq_sales -c "select id, branch_code, source_offset, reject_reason, replay_result from dead_letter"
-# Branch: send state of every (day, revision), from its MongoDB; --history adds every attempt and receipt
+docker exec hq-db psql -U hq_app -d hq_sales -c "select id, branch_code, record_type, source_offset, record_date, reject_reason, replay_result from dead_letter"
+# Branch: send state of every (type, day, revision), from its MongoDB; --history adds every attempt and receipt
 branch-sales-producer/demo-branches/sync-state.sh BR0001
 # Branch: days in the back-office
 branch-sales-producer/demo-branches/sql.sh BR0001 branch-sales-producer/demo-branches/branch-status.sql
@@ -96,15 +96,15 @@ branch-sales-producer/demo-branches/sql.sh BR0002 branch-sales-producer/demo-bra
 Within about a minute, HQ has both days. BR0002's `C01` and `C02` arrive as one `BEVERAGE` line:
 
 ```
- branch_code | sale_date  | revision | total_amount | ... | received_at_bkk     | lines
- BR0001      | 2026-10-01 |        1 |     41870.50 | ... | 2026-10-05 14:09:11 | BEVERAGE 18200.00 x410, HOUSEHOLD 2500.00 x37, READY_MEAL 9120.50 x152, SNACK 12050.00 x395
- BR0002      | 2026-10-01 |        1 |      7730.00 | ... | 2026-10-05 14:09:13 | BEVERAGE 4650.00 x132, FRESH_FOOD 980.00 x30, SNACK 2100.00 x95
+ record | branch_code | business_date | revision | total_amount | ... | received_at_bkk     | lines
+ SALES  | BR0001      | 2026-10-01    |        1 |     41870.50 | ... | 2026-10-05 14:09:11 | BEVERAGE 18200.00 x410, HOUSEHOLD 2500.00 x37, READY_MEAL 9120.50 x152, SNACK 12050.00 x395
+ SALES  | BR0002      | 2026-10-01    |        1 |      7730.00 | ... | 2026-10-05 14:09:13 | BEVERAGE 4650.00 x132, FRESH_FOOD 980.00 x30, SNACK 2100.00 x95
 ```
 
 Each branch got HQ's receipt within a few seconds of sending (`sync-state.sh BR0001`):
 
 ```
-2026-10-01  r1  HQ_ACCEPTED  attempts=1  offsets=0  INSERTED stored revision 1
+SALES  2026-10-01  r1  HQ_ACCEPTED  attempts=1  offsets=0  INSERTED stored revision 1
 ```
 
 ### 3.2 Edit after sending (revision 2)
@@ -116,8 +116,8 @@ branch-sales-producer/demo-branches/sql.sh BR0001 branch-sales-producer/demo-bra
 The manager edits 2026-10-01 (back to `DRAFT`) and confirms again. The producer sends revision 2 and HQ replaces the header and lines; the branch sees the receipt:
 
 ```
-2026-10-01  r1  HQ_ACCEPTED  attempts=1  offsets=0  INSERTED stored revision 1
-2026-10-01  r2  HQ_ACCEPTED  attempts=1  offsets=1  UPDATED stored revision 2
+SALES  2026-10-01  r1  HQ_ACCEPTED  attempts=1  offsets=0  INSERTED stored revision 1
+SALES  2026-10-01  r2  HQ_ACCEPTED  attempts=1  offsets=1  UPDATED stored revision 2
 ```
 
 ```
@@ -133,7 +133,7 @@ branch-sales-producer/demo-branches/sql.sh BR0002 branch-sales-producer/demo-bra
 The day contains `C99`, which is not in BR0002's mapping. The producer does not send it, because HQ would only reject it. It is tried again every round, with the reason:
 
 ```
-2026-10-02  r1  FAILED       attempts=1  offsets=  no HQ category mapping for local category [C99]
+SALES  2026-10-02  r1  FAILED       attempts=1  offsets=  no HQ category mapping for local category [C99]
 ```
 
 Fix the mapping (add `C99: OTHER` to `branch-sales-producer/demo-branches/BR0002/branch.yaml`) and restart the producer:
@@ -153,14 +153,14 @@ branch-sales-producer/demo-branches/sql.sh BR0001 branch-sales-producer/demo-bra
 The day has gift cards, mapped to `GIFT_CARD`, a category HQ does not have. The producer sends it (the mapping is fine as far as the branch knows) and HQ rejects it (`UNKNOWN_CATEGORY`). Unlike a message that was never acknowledged, the branch learns the reason from HQ's receipt:
 
 ```
-2026-10-03  r1  HQ_REJECTED  attempts=1  offsets=2  UNKNOWN_CATEGORY: categoryCode [GIFT_CARD] is not in the category table
+SALES  2026-10-03  r1  HQ_REJECTED  attempts=1  offsets=2  UNKNOWN_CATEGORY: categoryCode [GIFT_CARD] is not in the category table
 ```
 
 HQ keeps the record unchanged:
 
 ```
- id | branch_code | source_offset |  reject_reason   | replay_result
-  1 | BR0001      |             2 | UNKNOWN_CATEGORY |
+ id | branch_code |  record_type  | source_offset | record_date |  reject_reason   | replay_result
+  1 | BR0001      | DAILY_SUMMARY |             2 |             | UNKNOWN_CATEGORY |
 ```
 
 The branch does not send it again on its own. HQ fixes the cause (adds the category) and asks for the record to be processed again:
@@ -170,10 +170,10 @@ docker exec hq-db psql -U hq_app -d hq_sales -c "insert into category (category_
 docker exec hq-db psql -U hq_app -d hq_sales -c "update dead_letter set replay_requested_at = now() where id = 1"
 ```
 
-Within 30 s the consumer replays it (`docker logs hq-consumer`: `Replayed dead letter 1 (BR0001 offset 2): INSERTED`), HQ has the day, the row shows `replay_result = INSERTED`, and the branch gets a second receipt for the same offset (`sync-state.sh BR0001 --history`):
+Within 30 s the consumer replays it (`docker logs hq-consumer`: `Replayed dead letter 1 (DAILY_SUMMARY BR0001 offset 2): INSERTED`), HQ has the day, the row shows `replay_result = INSERTED`, and the branch gets a second receipt for the same offset (`sync-state.sh BR0001 --history`):
 
 ```
-2026-10-03  r1  HQ_ACCEPTED  attempts=1  offsets=2  INSERTED stored revision 1
+SALES  2026-10-03  r1  HQ_ACCEPTED  attempts=1  offsets=2  INSERTED stored revision 1
     2026-10-05 14:11:05  SENT          offset=2
     2026-10-05 14:11:05  HQ_REJECTED   offset=2  UNKNOWN_CATEGORY: categoryCode [GIFT_CARD] is not in the category table
     2026-10-05 14:12:45  HQ_INSERTED   offset=2
@@ -187,10 +187,10 @@ Messages that fail other contract checks (not JSON, schema, totals, wrong branch
 branch-sales-producer/demo-branches/sql.sh BR0001 branch-sales-producer/demo-branches/BR0001/05-returns.sql
 ```
 
-The manager confirms the returns of two days. They go to the branch's second topic, `branch-sales.daily-return`. HQ stores a day's returns only when it has that day's sales: 2026-10-02 is there (3.1), so its returns are stored right away; 2026-10-05 has no sales yet, so HQ keeps those returns in `dead_letter` and tells the branch why (`sync-state.sh BR0001`):
+The manager confirms the returns of two days. They go to the branch's second topic, `branch-sales.daily-return`. HQ stores a day's returns only when it has that day's sales: 2026-10-01 is there (3.1), so its returns are stored right away; 2026-10-05 has no sales yet, so HQ keeps those returns in `dead_letter` and tells the branch why (`sync-state.sh BR0001`):
 
 ```
-RETURN 2026-10-02  r1  HQ_ACCEPTED  attempts=1  offsets=0  INSERTED stored revision 1
+RETURN 2026-10-01  r1  HQ_ACCEPTED  attempts=1  offsets=0  INSERTED stored revision 1
 RETURN 2026-10-05  r1  HQ_REJECTED  attempts=1  offsets=1  PARENT_MISSING: no daily sales of BR0001 for 2026-10-05 at HQ yet; replayed when they arrive
 ```
 
@@ -235,7 +235,7 @@ branch-sales-consumer/infra/offboard-branch.sh BR0001
 branch-sales-producer/demo-branches/sql.sh BR0001 branch-sales-producer/demo-branches/BR0001/03-next-day.sql
 ```
 
-The branch sends as usual, into its own broker, and waits for a receipt (`2026-10-02  r1  SENT`). HQ onboards the branch again with a new password; the branch puts the new password into its `.env` and runs `kafka-init` again, which replaces user `hq`'s password:
+The branch sends as usual, into its own broker, and waits for a receipt (`SALES  2026-10-02  r1  SENT`). HQ onboards the branch again with a new password; the branch puts the new password into its `.env` and runs `kafka-init` again, which replaces user `hq`'s password:
 
 ```bash
 HQ_KAFKA_PASSWORD=pw-hq-at-br0001-new branch-sales-consumer/infra/onboard-branch.sh BR0001 "Demo branch 1"

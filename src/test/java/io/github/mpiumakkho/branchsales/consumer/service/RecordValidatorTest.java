@@ -86,6 +86,28 @@ class RecordValidatorTest {
 		assertRejected(value.getBytes(StandardCharsets.UTF_8), RejectReason.INVALID_JSON);
 	}
 
+	// Return examples: accepted by the return schema, or the reason they are rejected (reference checks need the DB)
+	private static final Map<String, RejectReason> RETURN_REJECTED = Map.of(
+			"invalid-schema/sale-date-instead-of-return-date.json", RejectReason.SCHEMA_INVALID);
+	private static final Set<String> RETURN_ACCEPTED = Set.of("valid/basic.json");
+
+	@Test
+	void everyReturnExampleHasAnExpectedResult() {
+		Set<String> covered = new HashSet<>(RETURN_ACCEPTED);
+		covered.addAll(RETURN_REJECTED.keySet());
+		assertThat(covered).containsExactlyInAnyOrderElementsOf(ContractExamples.allReturns());
+		for (String example : ContractExamples.allReturns()) {
+			byte[] value = ContractExamples.readReturn(example);
+			if (RETURN_ACCEPTED.contains(example)) {
+				assertThat(validator.validate(RecordType.DAILY_RETURN, "BR0001", "BR0001", value)).isNotNull();
+			}
+			else {
+				assertThatThrownBy(() -> validator.validate(RecordType.DAILY_RETURN, "BR0001", "BR0001", value))
+						.extracting(e -> ((RejectedMessageException) e).reason()).isEqualTo(RETURN_REJECTED.get(example));
+			}
+		}
+	}
+
 	@Test
 	void returnExamplesAreCheckedAgainstTheReturnSchema() {
 		DailyFigures figures = validator.validate(RecordType.DAILY_RETURN, "BR0001", "BR0001",

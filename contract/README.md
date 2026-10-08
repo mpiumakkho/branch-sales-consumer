@@ -87,6 +87,8 @@ The same rules apply to `daily-sales-receipt.v1.schema.json`, with the branch pr
 
 Deploy order for a new summary schema version: upgrade the HQ consumer to accept both versions first, then upgrade branches one by one. Branches upgrade at different times, so the consumer keeps accepting the old version until no branch sends it.
 
+Deploy order for a new record type (as with `DailyReturn`): the consumer first. At a branch whose `kafka-init` has not created the new topic (or its ACL) yet, the consumer reads the topics it can and checks again at every registry refresh; the branch's sales are not affected. The producer first would be wrong: it would fail to send the new type, and only the new type, until the broker has the topic.
+
 ## Examples
 
 | Folder | Expected result |

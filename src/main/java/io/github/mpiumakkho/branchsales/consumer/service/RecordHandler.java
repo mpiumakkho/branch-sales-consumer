@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service;
 
 import io.github.mpiumakkho.branchsales.consumer.dto.Receipt;
 import io.github.mpiumakkho.branchsales.consumer.dto.RecordType;
+import io.github.mpiumakkho.branchsales.consumer.exception.RejectReason;
 import io.github.mpiumakkho.branchsales.consumer.exception.RejectedMessageException;
 import io.github.mpiumakkho.branchsales.consumer.repository.DailyFiguresStore.Outcome;
 import io.github.mpiumakkho.branchsales.consumer.repository.DeadLetterStore;
@@ -56,6 +57,12 @@ public class RecordHandler {
 		catch (RejectedMessageException e) {
 			log.warn("Rejected {} {} offset {}: {} key={}", type, branchCode, sourceOffset, e.getMessage(), key);
 			deadLetters.save(type, branchCode, sourceOffset, key, value, e);
+			if (e.reason() == RejectReason.PARENT_MISSING && e.figures() != null
+					&& deadLetters.requestReplayIfParentExists(branchCode, sourceOffset, e.figures().date()) > 0) {
+				// The sales arrived between the check and the dead_letter write (replayer thread)
+				log.info("Sales of {} {} arrived meanwhile: replay of the return at offset {} requested", branchCode,
+						e.figures().date(), sourceOffset);
+			}
 			return Receipt.rejected(type, branchCode, sourceOffset, e, OffsetDateTime.now());
 		}
 	}

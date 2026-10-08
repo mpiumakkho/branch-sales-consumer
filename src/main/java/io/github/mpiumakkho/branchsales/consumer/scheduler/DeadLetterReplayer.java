@@ -9,6 +9,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import io.github.mpiumakkho.branchsales.consumer.dto.Receipt;
+import io.github.mpiumakkho.branchsales.consumer.exception.RejectReason;
 import io.github.mpiumakkho.branchsales.consumer.exception.RejectedMessageException;
 import io.github.mpiumakkho.branchsales.consumer.kafka.ReceiptPublisher;
 import io.github.mpiumakkho.branchsales.consumer.listener.BranchListeners;
@@ -80,6 +81,12 @@ public class DeadLetterReplayer {
 		catch (RejectedMessageException e) {
 			receipts.publish(branchKafka, Receipt.rejected(deadLetter.type(), branchCode, offset, e, OffsetDateTime.now()));
 			deadLetters.markReplayRejected(deadLetter.id(), e);
+			if (e.reason() == RejectReason.PARENT_MISSING && e.figures() != null
+					&& deadLetters.requestReplayIfParentExists(branchCode, offset, e.figures().date()) > 0) {
+				// The sales were stored while this replay ran: their request is older than markReplayRejected, so ask again
+				log.info("Sales of {} {} arrived during the replay: dead letter {} requested again", branchCode,
+						e.figures().date(), deadLetter.id());
+			}
 			log.warn("Replayed dead letter {} ({} offset {}) rejected again: {}", deadLetter.id(), branchCode, offset,
 					e.getMessage());
 		}
